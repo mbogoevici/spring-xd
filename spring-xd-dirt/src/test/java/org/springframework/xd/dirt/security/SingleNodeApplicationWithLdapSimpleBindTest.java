@@ -18,41 +18,43 @@ package org.springframework.xd.dirt.security;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import org.junit.ClassRule;
 import org.junit.Test;
-
-import org.springframework.web.client.RestTemplate;
+import org.junit.rules.RuleChain;
+import org.junit.rules.TestRule;
 
 /**
  * @author Marius Bogoevici
  */
-@WithSpringConfigLocation("classpath:org/springframework/xd/dirt/security/simpleSecurity.yml")
-public class SingleNodeApplicationWithUserBasedSecurityTest extends AbstractSingleNodeApplicationSecurityTest {
+@WithSpringConfigLocation("classpath:org/springframework/xd/dirt/security/ldapSimpleBind.yml")
+public class SingleNodeApplicationWithLdapSimpleBindTest extends AbstractSingleNodeApplicationSecurityTest {
+
+	private final static SpringXdResource springXdResource = new SpringXdResource();
 
 	@ClassRule
-	public static SpringXdResource springXdResource = new SpringXdResource();
+	public static TestRule springXdAndLdapServer = RuleChain
+			                         .outerRule(new LdapServerResource())
+			                     	 .around(springXdResource);
+
 
 	@Test
 	public void testUnauthenticatedAccessToModulesEndpointFails() throws Exception {
-        springXdResource.getMockMvc().perform(
+		springXdResource.getMockMvc().perform(
 				get("/modules"))
 				.andExpect(
 						status().isUnauthorized()
-				).andExpect(header().string("WWW-Authenticate", "Basic realm=\"SpringXD\"")
-		);
+				);
 	}
 
 	@Test
 	public void testUnauthenticatedAccessToManagementEndpointFails() throws Exception {
 		springXdResource.getMockMvc().perform(
-				get("/management/metrics")
-		).andExpect(
+						get("/management/metrics")
+				).andExpect(
 						status().isUnauthorized()
-				).andExpect(header().string("WWW-Authenticate", "Basic realm=\"SpringXD\"")
-		);
+				);
 	}
 
 	@Test
@@ -60,9 +62,42 @@ public class SingleNodeApplicationWithUserBasedSecurityTest extends AbstractSing
 		springXdResource.getMockMvc()
 				.perform(
 						get("/modules")
-								.header("Authorization", basicAuthorizationHeader("admin", "whosThere"))
+								.header("Authorization", basicAuthorizationHeader("bob", "bobspassword"))
 				).andDo(print()).andExpect(
 				status().isOk()
+		);
+	}
+
+	@Test
+	public void testWrongUsernameFails() throws Exception {
+		springXdResource.getMockMvc()
+				.perform(
+						get("/modules")
+								.header("Authorization", basicAuthorizationHeader("joe", "joespassword"))
+				).andDo(print()).andExpect(
+				status().isUnauthorized()
+		);
+	}
+
+	@Test
+	public void testDefaultSpringBootConfigurationFails() throws Exception {
+		springXdResource.getMockMvc()
+				.perform(
+						get("/modules")
+								.header("Authorization", basicAuthorizationHeader("admin", "whosThere"))
+				).andDo(print()).andExpect(
+				status().isUnauthorized()
+		);
+	}
+
+	@Test
+	public void testWrongPasswordFails() throws Exception {
+		springXdResource.getMockMvc()
+				.perform(
+						get("/modules")
+								.header("Authorization", basicAuthorizationHeader("bob", "bobpassword999"))
+				).andDo(print()).andExpect(
+				status().isUnauthorized()
 		);
 	}
 
@@ -71,7 +106,7 @@ public class SingleNodeApplicationWithUserBasedSecurityTest extends AbstractSing
 		springXdResource.getMockMvc()
 				.perform(
 						get("/management/metrics")
-								.header("Authorization", basicAuthorizationHeader("admin", "whosThere"))
+								.header("Authorization", basicAuthorizationHeader("bob", "bobspassword"))
 				).andDo(print())
 				.andExpect(
 						status().isOk()
