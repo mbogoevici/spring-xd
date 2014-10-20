@@ -36,12 +36,10 @@ import org.springframework.web.client.RestTemplate;
 /**
  * @author Marius Bogoevici
  */
-
-@WithSpringConfigLocation("classpath:org/springframework/xd/dirt/security/sslEnabled.yml")
-public class SingleNodeApplicationWithSslTest extends AbstractSingleNodeApplicationSecurityTest {
+public class SingleNodeApplicationWithSslTest {
 
 	@ClassRule
-	public static SpringXdResource springXdResource = new SpringXdResource();
+	public static SpringXdResource springXdResource = new SpringXdResource("classpath:org/springframework/xd/dirt/security/sslEnabled.yml");
 
 	protected RestTemplate restTemplate;
 

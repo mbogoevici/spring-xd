@@ -38,11 +38,10 @@ import org.springframework.web.client.RestTemplate;
  * @author Marius Bogoevici
  */
 
-@WithSpringConfigLocation("classpath:org/springframework/xd/dirt/security/defaultSecurity.yml")
-public class SingleNodeApplicationWithDefaultSecurityTest extends AbstractSingleNodeApplicationSecurityTest {
+public class SingleNodeApplicationWithDefaultSecurityTest {
 
 	@ClassRule
-	public static SpringXdResource springXdResource = new SpringXdResource();
+	public static SpringXdResource springXdResource = new SpringXdResource("classpath:org/springframework/xd/dirt/security/defaultSecurity.yml");
 
 	private RestTemplate restTemplate;
 

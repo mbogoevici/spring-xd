@@ -17,14 +17,12 @@
 
 package org.springframework.xd.dirt.security;
 
+import java.util.Collection;
+
 import javax.servlet.Filter;
 
 import org.junit.rules.ExternalResource;
-import org.junit.runner.Description;
-import org.junit.runners.model.Statement;
 
-import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.util.StringUtils;
@@ -44,24 +42,24 @@ public class SpringXdResource extends ExternalResource {
 
 	private String adminPort;
 
-	@Override
-	public Statement apply(Statement base, Description description) {
-		WithSpringConfigLocation springConfigLocationAnnotation = AnnotationUtils.findAnnotation(description.getTestClass(), WithSpringConfigLocation.class);
-		originalConfigLocation = System.getProperty("spring.config.location");
-		if (springConfigLocationAnnotation == null || StringUtils.isEmpty(springConfigLocationAnnotation.value())) {
-		} else {
-			System.setProperty("spring.config.location", springConfigLocationAnnotation.value());
-		}
-		return super.apply(base, description);
+	private String configurationLocation;
+
+	public SpringXdResource(String configurationLocation) {
+		this.configurationLocation = configurationLocation;
 	}
 
 	@Override
 	protected void before() throws Throwable {
+		originalConfigLocation = System.getProperty("spring.config.location");
+		if (!StringUtils.isEmpty(configurationLocation)) {
+			System.setProperty("spring.config.location", configurationLocation);
+		}
 		singleNodeApplication = new SingleNodeApplication();
 		singleNodeApplication.run();
-		ConfigurableApplicationContext configurableApplicationContext = singleNodeApplication.adminContext();
-		mockMvc = MockMvcBuilders.webAppContextSetup((WebApplicationContext) configurableApplicationContext)
-								 .addFilters(configurableApplicationContext.getBeansOfType(Filter.class).values().toArray(new Filter[]{}))
+		WebApplicationContext configurableApplicationContext = (WebApplicationContext) singleNodeApplication.adminContext();
+		Collection<Filter> filters = configurableApplicationContext.getBeansOfType(Filter.class).values();
+		mockMvc = MockMvcBuilders.webAppContextSetup(configurableApplicationContext)
+								 .addFilters(filters.toArray(new Filter[filters.size()]))
 								 .build();
 		adminPort = singleNodeApplication.adminContext().getEnvironment().resolvePlaceholders("${server.port}");
 	}

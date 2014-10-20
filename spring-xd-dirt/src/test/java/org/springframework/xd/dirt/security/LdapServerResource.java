@@ -33,9 +33,9 @@ import org.springframework.util.SocketUtils;
 public class LdapServerResource extends ExternalResource {
 
 
-	private static ApacheDSContainer apacheDSContainer;
+	private ApacheDSContainer apacheDSContainer;
 
-	private static File workingDir;
+	private File workingDir;
 
 	@Override
 	protected void before() throws Throwable {

@@ -20,20 +20,18 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.xd.dirt.security.SecurityTestUtils.basicAuthorizationHeader;
 
 import org.junit.ClassRule;
 import org.junit.Test;
 
-import org.springframework.web.client.RestTemplate;
-
 /**
  * @author Marius Bogoevici
  */
-@WithSpringConfigLocation("classpath:org/springframework/xd/dirt/security/simpleSecurity.yml")
-public class SingleNodeApplicationWithUserBasedSecurityTest extends AbstractSingleNodeApplicationSecurityTest {
+public class SingleNodeApplicationWithUserBasedSecurityTest {
 
 	@ClassRule
-	public static SpringXdResource springXdResource = new SpringXdResource();
+	public static SpringXdResource springXdResource = new SpringXdResource("classpath:org/springframework/xd/dirt/security/simpleSecurity.yml");
 
 	@Test
 	public void testUnauthenticatedAccessToModulesEndpointFails() throws Exception {
