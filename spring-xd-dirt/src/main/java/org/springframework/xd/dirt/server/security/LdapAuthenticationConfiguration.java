@@ -138,19 +138,15 @@ public class LdapAuthenticationConfiguration extends GlobalAuthenticationConfigu
 
 		LdapAuthenticationProviderConfigurer<AuthenticationManagerBuilder> ldapConfigurer = auth.ldapAuthentication();
 
-		Assert.hasText(url, "For LDAP authentication, 'url' must not be empty");
+		Assert.hasText(url, "'url' must not be empty");
 
-		Assert.isTrue(StringUtils.isEmpty(userDnPattern) ^ StringUtils.isEmpty(userSearchFilter), "For LDAP authentication, exactly one of 'userDnPattern' or 'userSearch' must be provided");
+		Assert.isTrue(StringUtils.isEmpty(userDnPattern) ^ StringUtils.isEmpty(userSearchFilter),
+				"exactly one of 'userDnPattern' or 'userSearch' must be provided");
 
-		Assert.isTrue(!(StringUtils.isEmpty(managerDn) ^ StringUtils.isEmpty(managerPassword)), "For LDAP authentication, either both of 'managerDn' and 'managerPassword' must be provided, or neither");
-
-		LdapAuthenticationProviderConfigurer<AuthenticationManagerBuilder>.ContextSourceBuilder contextSourceBuilder = ldapConfigurer.contextSource();
-
-		contextSourceBuilder.url(url);
-
-		if (!StringUtils.isEmpty(managerDn)) {
-			contextSourceBuilder.managerDn(managerDn).managerPassword(managerPassword);
-		}
+		ldapConfigurer.contextSource()
+				.url(url)
+				.managerDn(managerDn)
+				.managerPassword(managerPassword);
 
 		if (!StringUtils.isEmpty(userDnPattern)) {
 			ldapConfigurer.userDnPatterns(userDnPattern);
