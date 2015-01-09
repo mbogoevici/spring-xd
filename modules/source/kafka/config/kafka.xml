@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <beans xmlns="http://www.springframework.org/schema/beans"
-	   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-	   xmlns:int-kafka="http://www.springframework.org/schema/integration/kafka"
-	   xmlns:int="http://www.springframework.org/schema/integration"
-	   xsi:schemaLocation="http://www.springframework.org/schema/integration http://www.springframework.org/schema/integration/spring-integration.xsd
+			 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+			 xmlns:int-kafka="http://www.springframework.org/schema/integration/kafka"
+			 xmlns:int="http://www.springframework.org/schema/integration"
+			 xmlns:util="http://www.springframework.org/schema/util"
+			 xsi:schemaLocation="http://www.springframework.org/schema/integration http://www.springframework.org/schema/integration/spring-integration.xsd
 		http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+		http://www.springframework.org/schema/util http://www.springframework.org/schema/util/spring-util.xsd
 		http://www.springframework.org/schema/integration/kafka http://www.springframework.org/schema/integration/kafka/spring-integration-kafka.xsd">
 
 	<int:channel id="output"/>
@@ -14,46 +16,37 @@
 								 zk-session-timeout="${zksessionTimeout}"
 								 zk-sync-time="${zksyncTime}"/>
 
-	<int-kafka:inbound-channel-adapter kafka-consumer-context-ref="consumerContext" channel="kafkaOutput" auto-startup="false">
-		<int:poller fixed-delay="100" time-unit="MILLISECONDS" max-messages-per-poll="-1"/>
-	</int-kafka:inbound-channel-adapter>
+	<util:list id="topics">
+		<value>${topic}</value>
+	</util:list>
 
-	<bean id="consumerProperties" class="org.springframework.beans.factory.config.PropertiesFactoryBean">
-		<property name="properties">
-				<props>
-					<prop key="socket.timeout.ms">${socketTimeout}</prop>
-					<prop key="socket.receive.buffer.bytes">${socketBufferBytes}</prop>
-					<prop key="fetch.message.max.bytes">${fetchMaxBytes}</prop>
-					<prop key="auto.commit.enable">${autoCommitEnable}</prop>
-					<prop key="auto.commit.interval.ms">${autoCommitInterval}</prop>
-					<prop key="queued.max.message.chunks">${queuedChunksMax}</prop>
-					<prop key="rebalance.max.retries">${rebalanceMaxRetries}</prop>
-					<prop key="fetch.min.bytes">${fetchMinBytes}</prop>
-					<prop key="fetch.wait.max.ms">${fetchMaxWait}</prop>
-					<prop key="rebalance.backoff.ms">${rebalanceBackoff}</prop>
-					<prop key="refresh.leader.backoff.ms">${refreshLeaderBackOff}</prop>
-					<prop key="auto.offset.reset">${autoOffsetReset}</prop>
-					<prop key="consumer.timeout.ms">${consumerTimeout}</prop>
-				</props>
-		</property>
+	<bean id="kafkaConfiguration" class="org.springframework.integration.kafka.core.ZookeeperConfiguration">
+		<constructor-arg index="0" ref="zookeeperConnect"/>
+	</bean>
+
+	<bean id="connectionFactory" class="org.springframework.integration.kafka.core.ConnectionFactory">
+		<constructor-arg index="0" ref="kafkaConfiguration"/>
+	</bean>
+
+
+	<bean id="kafkaMessageListenerContainer"
+				class="org.springframework.integration.kafka.listener.KafkaMessageListenerContainer">
+		<constructor-arg index="0" ref="connectionFactory"/>
+		<constructor-arg index="1" ref="topics"/>
+		<property name="interval" value="${fetchMaxWait}"/>
+		<property name="maxFetchSizeInBytes" value="${fetchMaxBytes}"/>
 	</bean>
 
 	<bean id="stringDecoder" class="org.springframework.integration.kafka.serializer.common.StringDecoder">
-		<constructor-arg name="encoding" value="${encoding}"/>
+		<constructor-arg index="0" value="${encoding}"/>
 	</bean>
 
-	<int:chain input-channel="kafkaOutput" output-channel="output">
-		<int:transformer ref="kafkaMessageTransformer"/>
-	</int:chain>
-
-	<bean id="kafkaMessageTransformer" class="org.springframework.integration.x.kafka.KafkaMessageTransformer"/>
-
-	<int-kafka:consumer-context id="consumerContext" zookeeper-connect="zookeeperConnect" consumer-properties="consumerProperties">
-		<int-kafka:consumer-configurations>
-			<int-kafka:consumer-configuration group-id="${groupId}" value-decoder="stringDecoder">
-				<int-kafka:topic id="${topic}" streams="${streams}"/>
-			</int-kafka:consumer-configuration>
-		</int-kafka:consumer-configurations>
-	</int-kafka:consumer-context>
+	<bean id="kafkaInboundChannelAdapter"
+				class="org.springframework.integration.kafka.inbound.KafkaInboundChannelAdapter">
+		<constructor-arg index="0" ref="kafkaMessageListenerContainer"/>
+		<property name="outputChannel" ref="output"/>
+		<property name="keyDecoder" ref="stringDecoder"/>
+		<property name="payloadDecoder" ref="stringDecoder"/>
+	</bean>
 
 </beans>
