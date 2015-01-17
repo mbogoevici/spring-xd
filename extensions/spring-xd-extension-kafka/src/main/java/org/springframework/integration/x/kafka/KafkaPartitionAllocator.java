@@ -19,12 +19,12 @@ package org.springframework.integration.x.kafka;
 
 import static org.apache.curator.framework.imps.CuratorFrameworkState.STARTED;
 
+import java.io.IOException;
 import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -68,6 +68,8 @@ public class KafkaPartitionAllocator implements InitializingBean, FactoryBean<Pa
 
 	private final CuratorFramework client;
 
+	private final DeletionCapableMetadataOffsetManager offsetManager;
+
 	private String moduleName;
 
 	private String streamName;
@@ -78,8 +80,10 @@ public class KafkaPartitionAllocator implements InitializingBean, FactoryBean<Pa
 
 	private String partitionDataPath;
 
+	private Partition[] partitions;
+
 	public KafkaPartitionAllocator(CuratorFramework client, ConnectionFactory connectionFactory,
-			String topic, int sequence, int count) {
+			String topic, int sequence, int count, DeletionCapableMetadataOffsetManager offsetMetadataStore) {
 		Assert.notNull(connectionFactory, "cannot be null");
 		Assert.notNull(topic, "cannot be null");
 		Assert.hasText(topic, "cannot be empty");
@@ -89,6 +93,7 @@ public class KafkaPartitionAllocator implements InitializingBean, FactoryBean<Pa
 		this.client = client;
 		this.count = count;
 		this.sequence = sequence;
+		this.offsetManager = offsetMetadataStore;
 	}
 
 	public void setModuleName(String moduleName) {
@@ -113,7 +118,7 @@ public class KafkaPartitionAllocator implements InitializingBean, FactoryBean<Pa
 	}
 
 	@Override
-	public Partition[] getObject() throws Exception {
+	public synchronized Partition[] getObject() throws Exception {
 		if (log.isDebugEnabled()) {
 			log.debug("Module name is " + moduleName);
 			log.debug("Stream name is " + streamName);
@@ -121,76 +126,82 @@ public class KafkaPartitionAllocator implements InitializingBean, FactoryBean<Pa
 			log.debug("Sequence is " + sequence);
 			log.debug("Client is " + client);
 		}
-		if (STARTED.equals(client.getState())) {
-			try {
-				partitionDataMutex.acquire();
-				byte[] partitionData = client.getData().forPath(partitionDataPath);
-				if (partitionData == null || partitionData.length == 0) {
-					Collection<Partition> partitions = connectionFactory.getPartitions(topic);
-					final Map<Partition, BrokerAddress> leaders = connectionFactory.getLeaders(partitions);
-					ArrayList<Partition> sortedPartitions = new ArrayList<Partition>(partitions);
-					Collections.sort(sortedPartitions, new Comparator<Partition>() {
-						@Override
-						public int compare(Partition o1, Partition o2) {
-							int i = leaders.get(o1).toString().compareTo(leaders.get(o2).toString());
-							if (i != 0) {
-								return i;
+		if (partitions == null) {
+			if (STARTED.equals(client.getState())) {
+				try {
+					partitionDataMutex.acquire();
+					byte[] partitionData = client.getData().forPath(partitionDataPath);
+					if (partitionData == null || partitionData.length == 0) {
+						Collection<Partition> allPartitionsInTopic = connectionFactory.getPartitions(topic);
+						final Map<Partition, BrokerAddress> leaders = connectionFactory.getLeaders(allPartitionsInTopic);
+						ArrayList<Partition> sortedPartitions = new ArrayList<Partition>(allPartitionsInTopic);
+						Collections.sort(sortedPartitions, new Comparator<Partition>() {
+							@Override
+							public int compare(Partition o1, Partition o2) {
+								int i = leaders.get(o1).toString().compareTo(leaders.get(o2).toString());
+								if (i != 0) {
+									return i;
+								}
+								else return o1.getId() - o2.getId();
 							}
-							else return o1.getId() - o2.getId();
-						}
-					});
-					if (log.isDebugEnabled()) {
-						log.debug("Partitions: " + StringUtils.collectionToCommaDelimitedString(sortedPartitions));
-					}
-					// calculate the minimum size of a partition group.
-					int minimumSize = sortedPartitions.size() / count;
-					int remainder = sortedPartitions.size() % count;
-					List<List<Integer>> partitionGroups = new ArrayList<List<Integer>>();
-					int cursor = 0;
-					for (int i = 0; i < count; i++) {
-						// first partitions will get an extra element
-						int partitionGroupSize = i < remainder ? minimumSize + 1 : minimumSize;
-						ArrayList<Integer> partitionGroup = new ArrayList<Integer>();
-						for (int j = 0; j < partitionGroupSize; j++) {
-							partitionGroup.add(sortedPartitions.get(cursor++).getId());
-						}
+						});
 						if (log.isDebugEnabled()) {
-							log.debug("Partitions for " + (i + 1) + " : " + StringUtils.collectionToCommaDelimitedString(partitionGroup));
+							log.debug("Partitions: " + StringUtils.collectionToCommaDelimitedString(sortedPartitions));
 						}
-						partitionGroups.add(partitionGroup);
+						// calculate the minimum size of a partition group.
+						int minimumSize = sortedPartitions.size() / count;
+						int remainder = sortedPartitions.size() % count;
+						List<List<Integer>> partitionGroups = new ArrayList<List<Integer>>();
+						int cursor = 0;
+						for (int i = 0; i < count; i++) {
+							// first partitions will get an extra element
+							int partitionGroupSize = i < remainder ? minimumSize + 1 : minimumSize;
+							ArrayList<Integer> partitionGroup = new ArrayList<Integer>();
+							for (int j = 0; j < partitionGroupSize; j++) {
+								partitionGroup.add(sortedPartitions.get(cursor++).getId());
+							}
+							if (log.isDebugEnabled()) {
+								log.debug("Partitions for " + (i + 1) + " : " + StringUtils.collectionToCommaDelimitedString(partitionGroup));
+							}
+							partitionGroups.add(partitionGroup);
+						}
+						byte[] dataAsBytes = objectMapper.writer().writeValueAsBytes(partitionGroups);
+						if (log.isDebugEnabled()) {
+							log.debug(new String(dataAsBytes));
+						}
+						client.setData().forPath(partitionDataPath, dataAsBytes);
+						// the partition mapping is stored 0-based but sequence/count are 1-based
+						if (log.isDebugEnabled()) {
+							log.debug("Listening to: " + StringUtils.collectionToCommaDelimitedString(partitionGroups.get(sequence - 1)));
+						}
+						partitions = toPartitions(partitionGroups.get(sequence - 1));
 					}
-					byte[] dataAsBytes = objectMapper.writer().writeValueAsBytes(partitionGroups);
-					if (log.isDebugEnabled()) {
-						log.debug(new String(dataAsBytes));
+					else {
+						if (log.isDebugEnabled()) {
+							log.debug(new String(partitionData));
+						}
+						@SuppressWarnings("unchecked")
+						List<List<Integer>> partitionGroups = objectMapper.reader(List.class).readValue(partitionData);
+						// the partition mapping is stored 0-based but sequence/count are 1-based
+						if (log.isDebugEnabled()) {
+							log.debug("Listening to: " + StringUtils.collectionToCommaDelimitedString(partitionGroups.get(sequence - 1)));
+						}
+						partitions = toPartitions(partitionGroups.get(sequence - 1));
 					}
-					client.setData().forPath(partitionDataPath, dataAsBytes);
-					// the partition mapping is stored 0-based but sequence/count are 1-based
-					if (log.isDebugEnabled()) {
-						log.debug("Listening to: " + StringUtils.collectionToCommaDelimitedString(partitionGroups.get(sequence - 1)));
-					}
-					return toPartitions(partitionGroups.get(sequence - 1));
+					return partitions;
 				}
-				else {
-					if (log.isDebugEnabled()) {
-						log.debug(new String(partitionData));
+				finally {
+					if (partitionDataMutex.isAcquiredInThisProcess()) {
+						partitionDataMutex.release();
 					}
-					@SuppressWarnings("unchecked")
-					List<List<Integer>> partitionGroups = objectMapper.reader(List.class).readValue(partitionData);
-					// the partition mapping is stored 0-based but sequence/count are 1-based
-					if (log.isDebugEnabled()) {
-						log.debug("Listening to: " + StringUtils.collectionToCommaDelimitedString(partitionGroups.get(sequence - 1)));
-					}
-					return toPartitions(partitionGroups.get(sequence - 1));
 				}
 			}
-			finally {
-				if (partitionDataMutex.isAcquiredInThisProcess()) {
-					partitionDataMutex.release();
-				}
+			else {
+				throw new BeanInitializationException("Cannot connect to ZooKeeper, client state is " + client.getState());
 			}
 		}
 		else {
-			throw new BeanInitializationException("Cannot connect to ZooKeeper, client state is " + client.getState());
+			return partitions;
 		}
 	}
 
@@ -262,6 +273,19 @@ public class KafkaPartitionAllocator implements InitializingBean, FactoryBean<Pa
 		}
 		else {
 			log.warn("Could not check the stream state and perform cleanup, client state was " + state);
+		}
+		// clear metadata (offsets)
+		for (Partition partition : partitions) {
+			if (log.isDebugEnabled()) {
+				log.debug("Deleting offsets for " + partition.toString());
+			}
+			offsetManager.deleteOffset(partition);
+			try {
+				offsetManager.flush();
+			}
+			catch (IOException e) {
+				log.error("Error while trying to flush offsets: " + e);
+			}
 		}
 	}
 }

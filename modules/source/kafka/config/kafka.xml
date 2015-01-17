@@ -7,22 +7,14 @@
 		http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
 		http://www.springframework.org/schema/integration/kafka http://www.springframework.org/schema/integration/kafka/spring-integration-kafka.xsd">
 
+	<import resource="${offsetStorage:inmemory}-metadata-store.xml"/>
+
 	<int:channel id="output"/>
 
 	<int-kafka:zookeeper-connect id="kafkaSourceZookeeperConnect" zk-connect="${zkconnect}"
 								 zk-connection-timeout="${zkconnectionTimeout}"
 								 zk-session-timeout="${zksessionTimeout}"
 								 zk-sync-time="${zksyncTime}"/>
-
-	<bean id="partitions" class="org.springframework.integration.x.kafka.KafkaPartitionAllocator">
-		<constructor-arg index="0" ref="xd.zookeeper.connection"/>
-		<constructor-arg index="1" ref="connectionFactory"/>
-		<constructor-arg index="2" value="${topic}"/>
-		<constructor-arg index="4" value="${xd.module.count}"/>
-		<constructor-arg index="3" value="${xd.module.sequence}"/>
-		<property name="moduleName" value="${xd.module.name}"/>
-		<property name="streamName" value="${xd.stream.name}"/>
-	</bean>
 
 	<bean id="kafkaConfiguration" class="org.springframework.integration.kafka.core.ZookeeperConfiguration">
 		<constructor-arg index="0" ref="kafkaSourceZookeeperConnect"/>
@@ -34,12 +26,35 @@
 		<property name="maxWait" value="${fetchMaxWait}"/>
 	</bean>
 
+	<!-- enriches the behaviour of the MetadataStore, adding a distinct namespace to the keys -->
+	<bean id="namespaceMetadataStore" class="org.springframework.integration.x.kafka.NamespaceDelegatingConcurrentMetadataStore">
+		<constructor-arg index="0" ref="metadataStore"/>
+		<constructor-arg index="1" value="xd:${xd.stream.name}:${xd.module.name}"/>
+	</bean>
+
+	<bean id="offsetManager" class="org.springframework.integration.x.kafka.DeletionCapableMetadataOffsetManager">
+		<constructor-arg ref="connectionFactory"/>
+		<property name="consumerId" value="${groupId}"/>
+		<property name="metadataStore" ref="namespaceMetadataStore"/>
+	</bean>
+
+	<bean id="partitions" class="org.springframework.integration.x.kafka.KafkaPartitionAllocator">
+		<constructor-arg index="0" ref="xd.zookeeper.connection"/>
+		<constructor-arg index="1" ref="connectionFactory"/>
+		<constructor-arg index="2" value="${topic}"/>
+		<constructor-arg index="3" value="${xd.module.sequence}"/>
+		<constructor-arg index="4" value="${xd.module.count}"/>
+		<constructor-arg index="5" ref="offsetManager"/>
+		<property name="moduleName" value="${xd.module.name}"/>
+		<property name="streamName" value="${xd.stream.name}"/>
+	</bean>
 
 	<bean id="kafkaMessageListenerContainer"
 				class="org.springframework.integration.kafka.listener.KafkaMessageListenerContainer">
 		<constructor-arg index="0" ref="connectionFactory"/>
 		<constructor-arg index="1" ref="partitions"/>
 		<property name="maxFetch" value="${fetchMaxBytes}"/>
+		<property name="offsetManager" ref="offsetManager"/>
 	</bean>
 
 	<bean id="stringDecoder" class="org.springframework.integration.kafka.serializer.common.StringDecoder">
