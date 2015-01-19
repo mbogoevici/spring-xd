@@ -18,6 +18,7 @@ package org.springframework.xd.dirt.integration.kafka;
 
 import java.io.UnsupportedEncodingException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -30,6 +31,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import kafka.admin.AdminUtils;
+import kafka.api.TopicMetadata;
+import kafka.common.ErrorMapping;
+import kafka.common.LeaderNotAvailableException;
 import kafka.consumer.Consumer;
 import kafka.consumer.ConsumerConfig;
 import kafka.consumer.ConsumerIterator;
@@ -43,8 +47,12 @@ import kafka.serializer.DefaultDecoder;
 import kafka.serializer.DefaultEncoder;
 import kafka.utils.ZkUtils;
 import org.I0Itec.zkclient.ZkClient;
+import org.I0Itec.zkclient.exception.ZkInterruptedException;
 import org.I0Itec.zkclient.exception.ZkMarshallingError;
 import org.I0Itec.zkclient.serialize.ZkSerializer;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import scala.Tuple2;
 import scala.collection.Seq;
 
 import org.springframework.context.Lifecycle;
@@ -53,6 +61,7 @@ import org.springframework.integration.channel.DirectChannel;
 import org.springframework.integration.endpoint.EventDrivenConsumer;
 import org.springframework.integration.handler.AbstractMessageHandler;
 import org.springframework.integration.handler.AbstractReplyProducingMessageHandler;
+import org.springframework.integration.kafka.core.ConnectionFactory;
 import org.springframework.integration.kafka.support.ProducerConfiguration;
 import org.springframework.integration.kafka.support.ProducerFactoryBean;
 import org.springframework.integration.kafka.support.ProducerMetadata;
@@ -62,6 +71,13 @@ import org.springframework.messaging.MessageHandler;
 import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.SubscribableChannel;
 import org.springframework.messaging.support.MessageBuilder;
+import org.springframework.retry.RetryCallback;
+import org.springframework.retry.RetryContext;
+import org.springframework.retry.RetryPolicy;
+import org.springframework.retry.policy.CompositeRetryPolicy;
+import org.springframework.retry.policy.SimpleRetryPolicy;
+import org.springframework.retry.policy.TimeoutRetryPolicy;
+import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
 import org.springframework.util.MimeTypeUtils;
 import org.springframework.xd.dirt.integration.bus.AbstractBusPropertiesAccessor;
@@ -73,27 +89,26 @@ import org.springframework.xd.dirt.integration.bus.serializer.MultiTypeCodec;
 
 /**
  * A message bus that uses Kafka as the underlying middleware.
- *
  * The general implementation mapping between XD concepts and Kafka concepts is as follows:
  * <table>
- *     <tr>
- *         <th>Stream definition</th><th>Kafka topic</th><th>Kafka partitions</th><th>Notes</th>
- *     </tr>
- *     <tr>
- *         <td>foo = "http | log"</td><td>foo.0</td><td>1 partition</td><td>1 producer, 1 consumer</td>
- *     </tr>
- *     <tr>
- *         <td>foo = "http | log", log.count=x</td><td>foo.0</td><td>x partitions</td><td>1 producer, x consumers with static group 'springXD', achieves queue semantics</td>
- *     </tr>
- *     <tr>
- *         <td>foo = "http | log", log.count=x + XD partitioning</td><td>still 1 topic 'foo.0'</td><td>x partitions + use key computed by XD</td><td>1 producer, x consumers with static group 'springXD', achieves queue semantics</td>
- *     </tr>
- *     <tr>
- *         <td>foo = "http | log", log.count=x, concurrency=y</td><td>foo.0</td><td>x*y partitions</td><td>1 producer, x XD consumers, each with y threads</td>
- *     </tr>
- *     <tr>
- *         <td>foo = "http | log", log.count=0, x actual log containers</td><td>foo.0</td><td>10(configurable) partitions</td><td>1 producer, x XD consumers. Can't know the number of partitions beforehand, so decide a number that better be greater than number of containers</td>
- *     </tr>
+ * <tr>
+ * <th>Stream definition</th><th>Kafka topic</th><th>Kafka partitions</th><th>Notes</th>
+ * </tr>
+ * <tr>
+ * <td>foo = "http | log"</td><td>foo.0</td><td>1 partition</td><td>1 producer, 1 consumer</td>
+ * </tr>
+ * <tr>
+ * <td>foo = "http | log", log.count=x</td><td>foo.0</td><td>x partitions</td><td>1 producer, x consumers with static group 'springXD', achieves queue semantics</td>
+ * </tr>
+ * <tr>
+ * <td>foo = "http | log", log.count=x + XD partitioning</td><td>still 1 topic 'foo.0'</td><td>x partitions + use key computed by XD</td><td>1 producer, x consumers with static group 'springXD', achieves queue semantics</td>
+ * </tr>
+ * <tr>
+ * <td>foo = "http | log", log.count=x, concurrency=y</td><td>foo.0</td><td>x*y partitions</td><td>1 producer, x XD consumers, each with y threads</td>
+ * </tr>
+ * <tr>
+ * <td>foo = "http | log", log.count=0, x actual log containers</td><td>foo.0</td><td>10(configurable) partitions</td><td>1 producer, x XD consumers. Can't know the number of partitions beforehand, so decide a number that better be greater than number of containers</td>
+ * </tr>
  * </table>
  *
  * @author Eric Bottard
@@ -210,6 +225,7 @@ public class KafkaMessageBus extends MessageBusSupport {
 	private int numOfKafkaPartitionsForCountEqualsZero = 10;
 
 
+	private ConnectionFactory connectionFactory;
 
 	public KafkaMessageBus(String brokers, String zkAddress, MultiTypeCodec<Object> codec, String... headersToMap) {
 		this.brokers = brokers;
@@ -303,8 +319,6 @@ public class KafkaMessageBus extends MessageBusSupport {
 			ensureTopicCreated(topicName, numPartitions, defaultReplicationFactor);
 
 
-
-
 			ProducerMetadata<Integer, byte[]> producerMetadata = new ProducerMetadata<Integer, byte[]>(
 					topicName);
 			producerMetadata.setValueEncoder(new DefaultEncoder(null));
@@ -377,20 +391,50 @@ public class KafkaMessageBus extends MessageBusSupport {
 	 * Creates a Kafka topic if needed, or try to increase its partition count to the desired number.
 	 */
 	private void ensureTopicCreated(final String topicName, int numPartitions, int replicationFactor) {
+
 		final int sessionTimeoutMs = 10000;
 		final int connectionTimeoutMs = 10000;
-		ZkClient zkClient = new ZkClient(zkAddress, sessionTimeoutMs, connectionTimeoutMs, utf8Serializer);
+		final ZkClient zkClient = new ZkClient(zkAddress, sessionTimeoutMs, connectionTimeoutMs, utf8Serializer);
+		try {
+			// The following is basically copy/paste from AdminUtils.createTopic() with
+			// createOrUpdateTopicPartitionAssignmentPathInZK(..., update=true)
+			Properties topicConfig = new Properties();
+			Seq<Object> brokerList = ZkUtils.getSortedBrokerList(zkClient);
+			scala.collection.Map<Object, Seq<Object>> replicaAssignment = AdminUtils.assignReplicasToBrokers(brokerList,
+					numPartitions, replicationFactor, -1, -1);
+			AdminUtils.createOrUpdateTopicPartitionAssignmentPathInZK(zkClient, topicName, replicaAssignment, topicConfig,
+					true);
 
-		// The following is basically copy/paste from AdminUtils.createTopic() with
-		// createOrUpdateTopicPartitionAssignmentPathInZK(..., update=true)
-		Properties topicConfig = new Properties();
-		Seq<Object> brokerList = ZkUtils.getSortedBrokerList(zkClient);
-		scala.collection.Map<Object, Seq<Object>> replicaAssignment = AdminUtils.assignReplicasToBrokers(brokerList,
-				numPartitions, replicationFactor, -1, -1);
-		AdminUtils.createOrUpdateTopicPartitionAssignmentPathInZK(zkClient, topicName, replicaAssignment, topicConfig,
-				true);
+			RetryTemplate retryTemplate = new RetryTemplate();
+
+			CompositeRetryPolicy policy = new CompositeRetryPolicy();
+			TimeoutRetryPolicy timeoutRetryPolicy = new TimeoutRetryPolicy();
+			timeoutRetryPolicy.setTimeout(5000);
+			SimpleRetryPolicy simpleRetryPolicy = new SimpleRetryPolicy();
+			simpleRetryPolicy.setMaxAttempts(10);
+			policy.setPolicies(new RetryPolicy[] {timeoutRetryPolicy, simpleRetryPolicy});
+
+			try {
+				retryTemplate.execute(new RetryCallback<Boolean, Exception>() {
+					@Override
+					public Boolean doWithRetry(RetryContext context) throws Exception {
+						TopicMetadata topicMetadata = AdminUtils.fetchTopicMetadataFromZk(topicName, zkClient);
+						if (topicMetadata.errorCode() != ErrorMapping.NoError()) {
+							// downcast to Exception because that's what the error throws
+							throw (Exception) ErrorMapping.exceptionFor(topicMetadata.errorCode());
+						}
+						return true;
+					}
+				});
+			}
+			catch (Exception e) {
+				logger.error("Cannot initialize MessageBus", e);
+				throw new RuntimeException("Cannot initialize message bus:", e);
+			}
+		}
+		finally {
 		zkClient.close();
-
+		}
 	}
 
 	private void createKafkaConsumer(String name, final MessageChannel moduleInputChannel, Properties properties,
