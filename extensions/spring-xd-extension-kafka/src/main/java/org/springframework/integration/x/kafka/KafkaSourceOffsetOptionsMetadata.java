@@ -22,7 +22,7 @@ import org.springframework.xd.module.options.spi.ModuleOption;
 /**
  * @author Marius Bogoevici
  */
-public class KafkaSinkOffsetStorageOptionsMetadata {
+public class KafkaSourceOffsetOptionsMetadata {
 
 	private String offsetStorage = "inmemory";
 
@@ -34,4 +34,5 @@ public class KafkaSinkOffsetStorageOptionsMetadata {
 	public void setOffsetStorage(String offsetStorage) {
 		this.offsetStorage = offsetStorage;
 	}
+
 }

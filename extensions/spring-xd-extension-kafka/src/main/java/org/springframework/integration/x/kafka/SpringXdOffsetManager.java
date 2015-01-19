@@ -19,6 +19,8 @@ package org.springframework.integration.x.kafka;
 
 import java.util.Map;
 
+import kafka.api.OffsetRequest;
+
 import org.springframework.integration.kafka.core.ConnectionFactory;
 import org.springframework.integration.kafka.core.Partition;
 import org.springframework.integration.kafka.listener.MetadataStoreOffsetManager;
@@ -26,17 +28,38 @@ import org.springframework.integration.kafka.listener.MetadataStoreOffsetManager
 /**
  * @author Marius Bogoevici
  */
-public class DeletionCapableMetadataOffsetManager extends MetadataStoreOffsetManager {
+public class SpringXdOffsetManager extends MetadataStoreOffsetManager {
 
-	public DeletionCapableMetadataOffsetManager(ConnectionFactory connectionFactory) {
+	public SpringXdOffsetManager(ConnectionFactory connectionFactory) {
 		super(connectionFactory);
 	}
 
-	public DeletionCapableMetadataOffsetManager(ConnectionFactory connectionFactory, Map<Partition, Long> initialOffsets) {
+	public SpringXdOffsetManager(ConnectionFactory connectionFactory, Map<Partition, Long> initialOffsets) {
 		super(connectionFactory, initialOffsets);
 	}
 
 	public void deleteOffset(Partition partition) {
 		getMetadataStore().remove(partition.getTopic() + ":" + partition.getId() + ":" + getConsumerId());
 	}
+
+	public void setAutoOffsetReset(AutoOffsetResetStrategy autoOffsetResetStrategy) {
+		this.setReferenceTimestamp(autoOffsetResetStrategy.code());
+	}
+
+	public static enum AutoOffsetResetStrategy {
+
+		smallest(OffsetRequest.EarliestTime()),
+		largest(OffsetRequest.LatestTime());
+
+		private long code;
+
+		AutoOffsetResetStrategy(long code) {
+			this.code = code;
+		}
+
+		public long code() {
+			return code;
+		}
+	}
+
 }

@@ -22,11 +22,14 @@ import static org.apache.curator.framework.imps.CuratorFrameworkState.STARTED;
 import java.io.IOException;
 import java.lang.reflect.Array;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.logging.Log;
@@ -46,6 +49,7 @@ import org.springframework.integration.kafka.core.BrokerAddress;
 import org.springframework.integration.kafka.core.ConnectionFactory;
 import org.springframework.integration.kafka.core.Partition;
 import org.springframework.util.Assert;
+import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.xd.dirt.core.DeploymentUnitStatus;
 import org.springframework.xd.dirt.zookeeper.Paths;
@@ -60,6 +64,8 @@ public class KafkaPartitionAllocator implements InitializingBean, FactoryBean<Pa
 
 	private final String topic;
 
+	private final String partitionList;
+
 	private final ConnectionFactory connectionFactory;
 
 	private final int count;
@@ -68,7 +74,7 @@ public class KafkaPartitionAllocator implements InitializingBean, FactoryBean<Pa
 
 	private final CuratorFramework client;
 
-	private final DeletionCapableMetadataOffsetManager offsetManager;
+	private final SpringXdOffsetManager offsetManager;
 
 	private String moduleName;
 
@@ -83,12 +89,13 @@ public class KafkaPartitionAllocator implements InitializingBean, FactoryBean<Pa
 	private Partition[] partitions;
 
 	public KafkaPartitionAllocator(CuratorFramework client, ConnectionFactory connectionFactory,
-			String topic, int sequence, int count, DeletionCapableMetadataOffsetManager offsetMetadataStore) {
+			String topic, String partitionList, int sequence, int count, SpringXdOffsetManager offsetMetadataStore) {
 		Assert.notNull(connectionFactory, "cannot be null");
 		Assert.notNull(topic, "cannot be null");
 		Assert.hasText(topic, "cannot be empty");
 		Assert.isTrue(count > 0, " must be a positive number. 0 count modules");
 		this.topic = topic;
+		this.partitionList = partitionList;
 		this.connectionFactory = connectionFactory;
 		this.client = client;
 		this.count = count;
@@ -132,9 +139,17 @@ public class KafkaPartitionAllocator implements InitializingBean, FactoryBean<Pa
 					partitionDataMutex.acquire();
 					byte[] partitionData = client.getData().forPath(partitionDataPath);
 					if (partitionData == null || partitionData.length == 0) {
-						Collection<Partition> allPartitionsInTopic = connectionFactory.getPartitions(topic);
-						final Map<Partition, BrokerAddress> leaders = connectionFactory.getLeaders(allPartitionsInTopic);
-						ArrayList<Partition> sortedPartitions = new ArrayList<Partition>(allPartitionsInTopic);
+						Collection<Partition> existingPartitions = connectionFactory.getPartitions(topic);
+						Collection<Partition> listenedPartitions = !StringUtils.hasText(partitionList) ?
+								existingPartitions : Arrays.asList(toPartitions(parseNumberList(partitionList)));
+						if (existingPartitions != listenedPartitions && !existingPartitions.containsAll(listenedPartitions)) {
+							Collection<Partition> partitionsNotFound = new ArrayList<Partition>(listenedPartitions);
+							partitionsNotFound.removeAll(existingPartitions);
+							throw new BeanInitializationException("Configuration contains partitions that do not exist on the topic" +
+									" or have unavailable leaders: " + StringUtils.collectionToCommaDelimitedString(partitionsNotFound));
+						}
+						final Map<Partition, BrokerAddress> leaders = connectionFactory.getLeaders(listenedPartitions);
+						ArrayList<Partition> sortedPartitions = new ArrayList<Partition>(listenedPartitions);
 						Collections.sort(sortedPartitions, new Comparator<Partition>() {
 							@Override
 							public int compare(Partition o1, Partition o2) {
@@ -287,5 +302,40 @@ public class KafkaPartitionAllocator implements InitializingBean, FactoryBean<Pa
 				log.error("Error while trying to flush offsets: " + e);
 			}
 		}
+	}
+
+	/**
+	 * Expects a String containing a list of numbers or ranges, e.g. {@code "1-10"}, {@code "1,3,5"},
+	 * {@code "1,5,10-20,26,100-110,145"}. One-sized ranges or ranges where the start is after the end
+	 * are not permitted.
+	 * Returns an array of Integers containing the actual numbers.
+	 *
+	 * @param numberList a string containing numbers, or ranges
+	 * @return the list of integers
+	 * @throws IllegalArgumentException if the format of the list is incorrect
+	 */
+	public static Iterable<Integer> parseNumberList(String numberList) throws IllegalArgumentException {
+		Assert.hasText(numberList, "must contain a list of values");
+		// TODO: regex validate
+		Set<Integer> numbers = new TreeSet<Integer>();
+		String[] numbersOrRanges = numberList.split(",");
+		for (String numberOrRange : numbersOrRanges) {
+			if (numberOrRange.contains("-")) {
+				String[] split = numberOrRange.split("-");
+				Integer start = Integer.parseInt(split[0]);
+				Integer end = Integer.parseInt(split[1]);
+				if (start >= end) {
+					throw new IllegalArgumentException(String.format("A range contains a start which is after the end: %d-%d",
+							start, end));
+				}
+				for (int i = start; i <= end; i++) {
+					numbers.add(i);
+				}
+			}
+			else {
+				numbers.add(Integer.parseInt(numberOrRange));
+			}
+		}
+		return Collections.unmodifiableSet(numbers);
 	}
 }
