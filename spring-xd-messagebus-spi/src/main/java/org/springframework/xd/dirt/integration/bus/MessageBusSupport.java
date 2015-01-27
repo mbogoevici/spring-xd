@@ -41,6 +41,7 @@ import org.springframework.context.Lifecycle;
 import org.springframework.context.support.AbstractApplicationContext;
 import org.springframework.expression.EvaluationContext;
 import org.springframework.expression.Expression;
+import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.integration.channel.DirectChannel;
 import org.springframework.integration.endpoint.EventDrivenConsumer;
 import org.springframework.integration.expression.IntegrationEvaluationContextAware;
@@ -78,6 +79,12 @@ public abstract class MessageBusSupport
 	protected static final String JOB_CHANNEL_TYPE_PREFIX = "job:";
 
 	protected static final String PARTITION_HEADER = "partition";
+
+	protected static final String XD_REPLY_CHANNEL = "xdReplyChannel";
+
+	protected static final String REPLY_TO = "replyTo";
+
+	protected static final SpelExpressionParser parser = new SpelExpressionParser();
 
 	protected final Log logger = LogFactory.getLog(getClass());
 

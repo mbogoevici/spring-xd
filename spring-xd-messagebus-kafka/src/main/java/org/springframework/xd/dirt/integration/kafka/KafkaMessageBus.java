@@ -50,6 +50,7 @@ import org.I0Itec.zkclient.serialize.ZkSerializer;
 import scala.collection.Seq;
 
 import org.springframework.context.Lifecycle;
+import org.springframework.expression.Expression;
 import org.springframework.integration.IntegrationMessageHeaderAccessor;
 import org.springframework.integration.channel.DirectChannel;
 import org.springframework.integration.endpoint.EventDrivenConsumer;
@@ -81,7 +82,6 @@ import org.springframework.retry.policy.SimpleRetryPolicy;
 import org.springframework.retry.policy.TimeoutRetryPolicy;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
-import org.springframework.util.CollectionUtils;
 import org.springframework.util.MimeTypeUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.xd.dirt.integration.bus.AbstractBusPropertiesAccessor;
@@ -280,6 +280,10 @@ public class KafkaMessageBus extends MessageBusSupport {
 		this.offsetStoreTopic = offsetStoreTopic;
 	}
 
+	public ConnectionFactory getConnectionFactory() {
+		return connectionFactory;
+	}
+
 	@Override
 	public void afterPropertiesSet() throws Exception {
 		// we instantiate the connection factory here due to https://jira.spring.io/browse/XD-2647
@@ -366,57 +370,59 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 			TopicMetadata targetTopicMetadata = ensureTopicCreated(topicName, numPartitions, defaultReplicationFactor);
 
+			MessageHandler messageHandler = createTopicProducerHandler(accessor, topicName);
 
-			ProducerMetadata<Integer, byte[]> producerMetadata = new ProducerMetadata<Integer, byte[]>(
-					topicName);
-			producerMetadata.setValueEncoder(new DefaultEncoder(null));
-			producerMetadata.setValueClassType(byte[].class);
-			producerMetadata.setKeyEncoder(new IntegerEncoderDecoder(null));
-			producerMetadata.setKeyClassType(Integer.class);
-			producerMetadata.setCompressionCodec(accessor.getCompressionCodec(this.defaultCompressionCodec));
-			producerMetadata.setPartitioner(new DefaultPartitioner(null));
+			MessageHandler handler = new SendingHandler(messageHandler, topicName, null, accessor,
+					targetTopicMetadata.partitionsMetadata().size(), null);
+			EventDrivenConsumer consumer = new EventDrivenConsumer((SubscribableChannel) moduleOutputChannel, handler);
+			consumer.setBeanFactory(this.getBeanFactory());
+			consumer.setBeanName("outbound." + name);
+			consumer.afterPropertiesSet();
 
-			Properties additionalProps = new Properties();
-			additionalProps.put("request.required.acks", String.valueOf(accessor.getRequiredAcks(this.defaultRequiredAcks)));
-			if (accessor.isBatchingEnabled(this.defaultBatchingEnabled)) {
-				producerMetadata.setAsync(true);
-				producerMetadata.setBatchNumMessages(String.valueOf(accessor.getBatchSize(this.defaultBatchSize)));
-				additionalProps.put("queue.buffering.max.ms", String.valueOf(accessor.getBatchTimeout(this.defaultBatchTimeout)));
-			}
-
-			ProducerFactoryBean<Integer, byte[]> producerFB = new ProducerFactoryBean<Integer, byte[]>(producerMetadata, brokers, additionalProps);
-
-			try {
-				final Producer<Integer, byte[]> producer = producerFB.getObject();
-
-
-				final ProducerConfiguration<Integer, byte[]> producerConfiguration = new ProducerConfiguration<Integer, byte[]>(
-						producerMetadata, producer);
-
-				MessageHandler messageHandler = new AbstractMessageHandler() {
-
-					@Override
-					protected void handleMessageInternal(Message<?> message) throws Exception {
-						producerConfiguration.send(topicName, message.getHeaders().get("messageKey"), message);
-					}
-				};
-
-				MessageHandler handler = new SendingHandler(messageHandler, topicName, accessor,
-						targetTopicMetadata.partitionsMetadata().size());
-				EventDrivenConsumer consumer = new EventDrivenConsumer((SubscribableChannel) moduleOutputChannel, handler);
-				consumer.setBeanFactory(this.getBeanFactory());
-				consumer.setBeanName("outbound." + name);
-				consumer.afterPropertiesSet();
-				Binding producerBinding = Binding.forProducer(name, moduleOutputChannel, consumer, accessor);
-				addBinding(producerBinding);
-				producerBinding.start();
-			}
-			catch (Exception e) {
-				throw new RuntimeException(e);
-			}
-
+			Binding producerBinding = Binding.forProducer(name, moduleOutputChannel, consumer, accessor);
+			addBinding(producerBinding);
+			producerBinding.start();
 		}
 
+	}
+
+	private MessageHandler createTopicProducerHandler(KafkaPropertiesAccessor accessor, final String topicName) {
+		ProducerMetadata<Integer, byte[]> producerMetadata = new ProducerMetadata<Integer, byte[]>(
+				topicName);
+		producerMetadata.setValueEncoder(new DefaultEncoder(null));
+		producerMetadata.setValueClassType(byte[].class);
+		producerMetadata.setKeyEncoder(new IntegerEncoderDecoder(null));
+		producerMetadata.setKeyClassType(Integer.class);
+		producerMetadata.setCompressionCodec(accessor.getCompressionCodec(this.defaultCompressionCodec));
+		producerMetadata.setPartitioner(new DefaultPartitioner(null));
+
+		Properties additionalProps = new Properties();
+		additionalProps.put("request.required.acks", String.valueOf(accessor.getRequiredAcks(this.defaultRequiredAcks)));
+		if (accessor.isBatchingEnabled(this.defaultBatchingEnabled)) {
+			producerMetadata.setAsync(true);
+			producerMetadata.setBatchNumMessages(String.valueOf(accessor.getBatchSize(this.defaultBatchSize)));
+			additionalProps.put("queue.buffering.max.ms", String.valueOf(accessor.getBatchTimeout(this.defaultBatchTimeout)));
+		}
+
+		ProducerFactoryBean<Integer, byte[]> producerFB = new ProducerFactoryBean<Integer, byte[]>(producerMetadata, brokers, additionalProps);
+
+		final Producer<Integer, byte[]> producer;
+		try {
+			producer = producerFB.getObject();
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+
+		final ProducerConfiguration<Integer, byte[]> producerConfiguration = new ProducerConfiguration<Integer, byte[]>(
+				producerMetadata, producer);
+
+		return new AbstractMessageHandler() {
+			@Override
+			protected void handleMessageInternal(Message<?> message) throws Exception {
+				producerConfiguration.send(topicName, message.getHeaders().get("messageKey"), message);
+			}
+		};
 	}
 
 	@Override
@@ -426,14 +432,95 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 	@Override
 	public void bindRequestor(String name, MessageChannel requests, MessageChannel replies, Properties properties) {
-		// TODO Auto-generated method stub
-		throw new UnsupportedOperationException("Auto-generated method stub");
+		if (logger.isInfoEnabled()) {
+			logger.info("binding requestor: " + name);
+		}
+		Assert.isInstanceOf(SubscribableChannel.class, requests);
+		validateProducerProperties(name, properties, PRODUCER_STANDARD_PROPERTIES);
+		KafkaPropertiesAccessor accessor = new KafkaPropertiesAccessor(properties);
+
+		// create producer
+		String requestsTopicName = escapeTopicName("queue." + name + ".requests");
+		ensureTopicCreated(requestsTopicName, 1, 1);
+		MessageHandler sendingMessageHandler = createTopicProducerHandler(accessor, requestsTopicName);
+
+		String replyQueueName = name + ".replies." + this.getIdGenerator().generateId();
+		ensureTopicCreated(escapeTopicName(replyQueueName), 1, defaultReplicationFactor);
+		Assert.isInstanceOf(SubscribableChannel.class, requests);
+
+		MessageHandler handler = new SendingHandler(sendingMessageHandler, requestsTopicName
+				, replyQueueName, accessor, 1, null);
+		EventDrivenConsumer consumer = new EventDrivenConsumer((SubscribableChannel) requests, handler);
+		consumer.setBeanFactory(this.getBeanFactory());
+		consumer.setBeanName("outbound." + name);
+		consumer.afterPropertiesSet();
+		Binding producerBinding = Binding.forProducer(name, requests, consumer, accessor);
+		addBinding(producerBinding);
+		producerBinding.start();
+
+		// create consumer
+		KafkaMessageDrivenChannelAdapter adapter = new KafkaMessageDrivenChannelAdapter(createMessageListenerContainer
+				(POINT_TO_POINT_SEMANTICS_CONSUMER_GROUP, accessor.getConcurrency(1),
+						connectionFactory.getPartitions(escapeTopicName("queue." + name + "" + ".requests")), OffsetRequest.EarliestTime()));
+		DirectChannel bridgeToModuleChannel = new DirectChannel();
+		bridgeToModuleChannel.setBeanFactory(this.getBeanFactory());
+		bridgeToModuleChannel.setBeanName(name + ".bridge");
+		adapter.setOutputChannel(bridgeToModuleChannel);
+		adapter.setBeanName("inbound." + name);
+		adapter.afterPropertiesSet();
+		adapter.start();
+		Binding consumerBinding = Binding.forConsumer(name, adapter, replies, accessor);
+		addBinding(consumerBinding);
+		ReceivingHandler convertingBridge = new ReceivingHandler(adapter);
+		convertingBridge.setOutputChannel(replies);
+		convertingBridge.setBeanName(name + ".bridge.handler");
+		convertingBridge.afterPropertiesSet();
+		bridgeToModuleChannel.subscribe(convertingBridge);
+		consumerBinding.start();
 	}
 
 	@Override
 	public void bindReplier(String name, MessageChannel requests, MessageChannel replies, Properties properties) {
-		// TODO Auto-generated method stub
-		throw new UnsupportedOperationException("Auto-generated method stub");
+		if (logger.isInfoEnabled()) {
+			logger.info("binding replier: " + name);
+		}
+		validateConsumerProperties(name, properties, CONSUMER_STANDARD_PROPERTIES);
+		KafkaPropertiesAccessor accessor = new KafkaPropertiesAccessor(properties);
+		String requestsTopicName = escapeTopicName("queue." + name + "" + ".requests");
+		ensureTopicCreated(requestsTopicName, 1, defaultReplicationFactor);
+		KafkaMessageDrivenChannelAdapter adapter = new KafkaMessageDrivenChannelAdapter(createMessageListenerContainer
+				(POINT_TO_POINT_SEMANTICS_CONSUMER_GROUP, accessor.getConcurrency(1),
+						connectionFactory.getPartitions(requestsTopicName), OffsetRequest.EarliestTime()));
+		DirectChannel bridgeToModuleChannel = new DirectChannel();
+		bridgeToModuleChannel.setBeanFactory(this.getBeanFactory());
+		bridgeToModuleChannel.setBeanName(name + ".bridge");
+		adapter.setOutputChannel(bridgeToModuleChannel);
+		adapter.setBeanName("inbound." + name);
+		adapter.afterPropertiesSet();
+		adapter.start();
+		Binding consumerBinding = Binding.forConsumer(name, adapter, requests, accessor);
+		addBinding(consumerBinding);
+		ReceivingHandler convertingBridge = new ReceivingHandler(adapter);
+		convertingBridge.setOutputChannel(requests);
+		convertingBridge.setBeanName(name + ".bridge.handler");
+		convertingBridge.afterPropertiesSet();
+		bridgeToModuleChannel.subscribe(convertingBridge);
+		consumerBinding.start();
+
+
+		MessageHandler sendingMessageHandler = createTopicProducerHandler(accessor, requestsTopicName);
+		String replyQueueName = name + ".replies." + this.getIdGenerator().generateId();
+		Assert.isInstanceOf(SubscribableChannel.class, requests);
+
+		MessageHandler handler = new SendingHandler(sendingMessageHandler, null, replyQueueName, accessor, 1, parser
+				.parseExpression("headers['" + REPLY_TO + "']"));
+		EventDrivenConsumer consumer = new EventDrivenConsumer((SubscribableChannel) requests, handler);
+		consumer.setBeanFactory(this.getBeanFactory());
+		consumer.setBeanName("outbound." + name);
+		consumer.afterPropertiesSet();
+		Binding producerBinding = Binding.forProducer(name, replies, consumer, accessor);
+		addBinding(producerBinding);
+		producerBinding.start();
 	}
 
 	/**
@@ -524,9 +611,6 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 		ensureTopicCreated(topic, accessor.getCount() * concurrency, defaultReplicationFactor);
 
-		Decoder<byte[]> valueDecoder = new DefaultDecoder(null);
-		Decoder<Integer> keyDecoder = new IntegerEncoderDecoder();
-
 		Collection<Partition> allPartitions = connectionFactory.getPartitions(topic);
 
 		Collection<Partition> listenedPartitions;
@@ -563,12 +647,15 @@ public class KafkaMessageBus extends MessageBusSupport {
 			}
 		}
 
-		final DirectChannel bridge = new DirectChannel();
 
 		KafkaMessageListenerContainer messageListenerContainer =
 				createMessageListenerContainer(group, concurrency, listenedPartitions,
 						referencePoint);
 
+		final DirectChannel bridge = new DirectChannel();
+
+		Decoder<byte[]> valueDecoder = new DefaultDecoder(null);
+		Decoder<Integer> keyDecoder = new IntegerEncoderDecoder();
 		KafkaMessageDrivenChannelAdapter kafkaMessageDrivenChannelAdapter =
 				new KafkaMessageDrivenChannelAdapter(messageListenerContainer);
 		kafkaMessageDrivenChannelAdapter.setBeanFactory(this.getBeanFactory());
@@ -589,31 +676,22 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 	}
 
-	public KafkaMessageListenerContainer createMessageListenerContainer(String group, int numThreads, String topic,
-			long referencePoint) {
-		return createMessageListenerContainer(group, numThreads, topic, null, referencePoint);
-	}
+//	public KafkaMessageListenerContainer createMessageListenerContainer(String group, int numThreads, String topic,
+//			long referencePoint) {
+//		return createMessageListenerContainer(group, numThreads, topic, null, referencePoint);
+//	}
+//
+//	public KafkaMessageListenerContainer createMessageListenerContainer(String group, int numThreads,
+//			Collection<Partition> listenedPartitions, long referencePoint) {
+//		return createMessageListenerContainer(group, numThreads, null, listenedPartitions, referencePoint);
+//	}
 
 	public KafkaMessageListenerContainer createMessageListenerContainer(String group, int numThreads,
 			Collection<Partition> listenedPartitions, long referencePoint) {
-		return createMessageListenerContainer(group, numThreads, null, listenedPartitions, referencePoint);
-	}
-
-	private KafkaMessageListenerContainer createMessageListenerContainer(String group, int numThreads, String topic,
-			Collection<Partition> listenedPartitions, long referencePoint) {
-		Assert.isTrue(StringUtils.hasText(topic) ^ !CollectionUtils.isEmpty(listenedPartitions),
-				"Exactly one of topic or a list of listened partitions must be provided");
 		KafkaMessageListenerContainer messageListenerContainer;
-		if (topic != null) {
-			messageListenerContainer = new KafkaMessageListenerContainer(connectionFactory, topic);
-		}
-		else {
-			messageListenerContainer = new KafkaMessageListenerContainer(connectionFactory,
-					listenedPartitions.toArray(new Partition[listenedPartitions.size()]));
-		}
-		if (logger.isDebugEnabled()) {
-			logger.debug("Listening to topic " + topic);
-		}
+		messageListenerContainer = new KafkaMessageListenerContainer(connectionFactory,
+				listenedPartitions.toArray(new Partition[listenedPartitions.size()]));
+
 		// if we have less target partitions than target concurrency, adjust accordingly
 		messageListenerContainer.setConcurrency(Math.min(numThreads, listenedPartitions.size()));
 		KafkaTopicMetadataStore springXDOffsets =
@@ -695,6 +773,10 @@ public class KafkaMessageBus extends MessageBusSupport {
 			Message<?> theRequestMessage = requestMessage;
 			try {
 				theRequestMessage = embeddedHeadersMessageConverter.extractHeaders((Message<byte[]>) requestMessage);
+				System.out.println("Received:");
+				for (Map.Entry<String,Object> o : theRequestMessage.getHeaders().entrySet()	) {
+					System.out.println(o.getKey() + "=" + o.getValue());
+				}
 			}
 			catch (UnsupportedEncodingException e) {
 				logger.error("Could not convert message", e);
@@ -728,16 +810,24 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 		private final String topicName;
 
+		private final Expression expression;
+
 		private final int numberOfKafkaPartitions;
 
 		private int factor;
 
+		private final String replyTo;
 
-		private SendingHandler(MessageHandler delegate, String topicName,
-				KafkaPropertiesAccessor properties, int numberOfPartitions) {
+
+		private SendingHandler(MessageHandler delegate, String topicName, String replyTo,
+				KafkaPropertiesAccessor properties, int numberOfPartitions, Expression expression) {
+			this.replyTo = replyTo;
+			Assert.isTrue(StringUtils.hasText(topicName) ^ expression != null, "Either a topic name or an expression must " +
+					"be provided");
 			this.delegate = delegate;
 			this.topicName = topicName;
 			this.numberOfKafkaPartitions = numberOfPartitions;
+			this.expression = expression;
 			this.partitioningMetadata = new PartitioningMetadata(properties);
 			this.setBeanFactory(KafkaMessageBus.this.getBeanFactory());
 			if (partitioningMetadata.isPartitionedModule()) {
@@ -762,7 +852,7 @@ public class KafkaMessageBus extends MessageBusSupport {
 				int springXdPartition = determinePartition(message, partitioningMetadata);
 				// in order to do so, we will generate a number whose modulus when applied to total partition count
 				// is equal to springXdPartition
-				partition = (roundRobin()%factor) * partitioningMetadata.getPartitionCount() + springXdPartition;
+				partition = (roundRobin() % factor) * partitioningMetadata.getPartitionCount() + springXdPartition;
 			}
 			else {
 				// The value will be modulo-ed by numPartitions by Kafka itself
@@ -770,8 +860,21 @@ public class KafkaMessageBus extends MessageBusSupport {
 			}
 			additionalHeaders.put(PARTITION_HEADER, partition);
 			additionalHeaders.put("messageKey", partition);
-			additionalHeaders.put("topic", topicName);
+			if (expression != null) {
+				additionalHeaders.put("topic", expression.getValue(evaluationContext, message, String.class));
+			}
+			else {
+				additionalHeaders.put("topic", topicName);
+			}
+			if (replyTo != null) {
+				additionalHeaders.put(REPLY_TO, this.replyTo);
+			}
 
+			System.out.println("Sending with headers:");
+
+			for (Map.Entry<String, Object> stringObjectEntry : additionalHeaders.entrySet()) {
+					System.out.println(stringObjectEntry.getKey() + "=" + stringObjectEntry.getValue());
+			}
 
 			@SuppressWarnings("unchecked")
 			Message<byte[]> transformed = (Message<byte[]>) serializePayloadIfNecessary(message,

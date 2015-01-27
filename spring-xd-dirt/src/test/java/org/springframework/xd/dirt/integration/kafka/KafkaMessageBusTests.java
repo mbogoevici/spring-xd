@@ -20,6 +20,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertNotNull;
 
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -34,6 +35,7 @@ import org.junit.Test;
 import org.springframework.integration.channel.DirectChannel;
 import org.springframework.integration.channel.QueueChannel;
 import org.springframework.integration.kafka.core.KafkaMessage;
+import org.springframework.integration.kafka.core.Partition;
 import org.springframework.integration.kafka.listener.KafkaMessageListenerContainer;
 import org.springframework.integration.kafka.listener.MessageListener;
 import org.springframework.messaging.Message;
@@ -83,9 +85,11 @@ public class KafkaMessageBusTests extends PartitionCapableBusTests {
 		KafkaTestMessageBus busWrapper = (KafkaTestMessageBus) getMessageBus();
 		// Rewind offset, as tests will have typically already sent the messages we're trying to consume
 
+		Collection<Partition> partitions =
+				busWrapper.getCoreMessageBus().getConnectionFactory().getPartitions(name);
 		KafkaMessageListenerContainer messageListenerContainer =
-				busWrapper.getCoreMessageBus().createMessageListenerContainer(UUID.randomUUID().toString(), 1, topic,
-						OffsetRequest.EarliestTime());
+				busWrapper.getCoreMessageBus().createMessageListenerContainer(UUID.randomUUID().toString(), 1,
+						partitions, OffsetRequest.EarliestTime());
 
 		final BlockingQueue<KafkaMessage> messages = new ArrayBlockingQueue<KafkaMessage>(10);
 

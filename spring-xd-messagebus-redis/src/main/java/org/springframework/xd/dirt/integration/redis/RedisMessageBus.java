@@ -28,7 +28,6 @@ import java.util.Set;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.expression.Expression;
-import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.integration.IntegrationMessageHeaderAccessor;
 import org.springframework.integration.channel.DirectChannel;
 import org.springframework.integration.endpoint.EventDrivenConsumer;
@@ -71,10 +70,6 @@ public class RedisMessageBus extends MessageBusSupport implements DisposableBean
 
 	private static final String ERROR_HEADER = "errorKey";
 
-	private static final String XD_REPLY_CHANNEL = "xdReplyChannel";
-
-	private static final String REPLY_TO = "replyTo";
-
 	/**
 	 * The headers that will be propagated, by default.
 	 */
@@ -87,8 +82,6 @@ public class RedisMessageBus extends MessageBusSupport implements DisposableBean
 		ORIGINAL_CONTENT_TYPE_HEADER,
 		REPLY_TO
 	};
-
-	private static final SpelExpressionParser parser = new SpelExpressionParser();
 
 	private final String[] headersToMap;
 
