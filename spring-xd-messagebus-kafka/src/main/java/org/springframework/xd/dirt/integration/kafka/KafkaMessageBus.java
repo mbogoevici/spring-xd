@@ -198,7 +198,8 @@ public class KafkaMessageBus extends MessageBusSupport {
 			IntegrationMessageHeaderAccessor.SEQUENCE_NUMBER,
 			MessageHeaders.CONTENT_TYPE,
 			ORIGINAL_CONTENT_TYPE_HEADER,
-			XD_REPLY_CHANNEL
+			XD_REPLY_CHANNEL,
+			REPLY_TO
 	};
 
 	/**
@@ -435,7 +436,6 @@ public class KafkaMessageBus extends MessageBusSupport {
 		if (logger.isInfoEnabled()) {
 			logger.info("binding requestor: " + name);
 		}
-		Assert.isInstanceOf(SubscribableChannel.class, requests);
 		validateProducerProperties(name, properties, PRODUCER_STANDARD_PROPERTIES);
 		KafkaPropertiesAccessor accessor = new KafkaPropertiesAccessor(properties);
 
@@ -444,30 +444,30 @@ public class KafkaMessageBus extends MessageBusSupport {
 		ensureTopicCreated(requestsTopicName, 1, 1);
 		MessageHandler sendingMessageHandler = createTopicProducerHandler(accessor, requestsTopicName);
 
-		String replyQueueName = name + ".replies." + this.getIdGenerator().generateId();
-		ensureTopicCreated(escapeTopicName(replyQueueName), 1, defaultReplicationFactor);
-		Assert.isInstanceOf(SubscribableChannel.class, requests);
+		String replyTopicName = name + ".replies." + this.getIdGenerator().generateId();
+		ensureTopicCreated(escapeTopicName(replyTopicName), 1, defaultReplicationFactor);
 
-		MessageHandler handler = new SendingHandler(sendingMessageHandler, requestsTopicName
-				, replyQueueName, accessor, 1, null);
-		EventDrivenConsumer consumer = new EventDrivenConsumer((SubscribableChannel) requests, handler);
-		consumer.setBeanFactory(this.getBeanFactory());
-		consumer.setBeanName("outbound." + name);
-		consumer.afterPropertiesSet();
-		Binding producerBinding = Binding.forProducer(name, requests, consumer, accessor);
+		Assert.isInstanceOf(SubscribableChannel.class, requests);
+		MessageHandler handler = new SendingHandler(sendingMessageHandler, requestsTopicName, replyTopicName, accessor, 1, null);
+		EventDrivenConsumer sendingBridgeConsumer = new EventDrivenConsumer((SubscribableChannel) requests, handler);
+		sendingBridgeConsumer.setBeanFactory(this.getBeanFactory());
+		sendingBridgeConsumer.setBeanName("outbound." + name);
+		sendingBridgeConsumer.afterPropertiesSet();
+		Binding producerBinding = Binding.forProducer(name, requests, sendingBridgeConsumer, accessor);
 		addBinding(producerBinding);
 		producerBinding.start();
 
 		// create consumer
 		KafkaMessageDrivenChannelAdapter adapter = new KafkaMessageDrivenChannelAdapter(createMessageListenerContainer
 				(POINT_TO_POINT_SEMANTICS_CONSUMER_GROUP, accessor.getConcurrency(1),
-						connectionFactory.getPartitions(escapeTopicName("queue." + name + "" + ".requests")), OffsetRequest.EarliestTime()));
+						connectionFactory.getPartitions(escapeTopicName(replyTopicName)), OffsetRequest.EarliestTime()));
 		DirectChannel bridgeToModuleChannel = new DirectChannel();
 		bridgeToModuleChannel.setBeanFactory(this.getBeanFactory());
 		bridgeToModuleChannel.setBeanName(name + ".bridge");
 		adapter.setOutputChannel(bridgeToModuleChannel);
 		adapter.setBeanName("inbound." + name);
 		adapter.afterPropertiesSet();
+		adapter.setBeanFactory(getBeanFactory());
 		adapter.start();
 		Binding consumerBinding = Binding.forConsumer(name, adapter, replies, accessor);
 		addBinding(consumerBinding);
@@ -486,8 +486,10 @@ public class KafkaMessageBus extends MessageBusSupport {
 		}
 		validateConsumerProperties(name, properties, CONSUMER_STANDARD_PROPERTIES);
 		KafkaPropertiesAccessor accessor = new KafkaPropertiesAccessor(properties);
-		String requestsTopicName = escapeTopicName("queue." + name + "" + ".requests");
+
+		String requestsTopicName = escapeTopicName("queue." + name + ".requests");
 		ensureTopicCreated(requestsTopicName, 1, defaultReplicationFactor);
+
 		KafkaMessageDrivenChannelAdapter adapter = new KafkaMessageDrivenChannelAdapter(createMessageListenerContainer
 				(POINT_TO_POINT_SEMANTICS_CONSUMER_GROUP, accessor.getConcurrency(1),
 						connectionFactory.getPartitions(requestsTopicName), OffsetRequest.EarliestTime()));
@@ -496,6 +498,7 @@ public class KafkaMessageBus extends MessageBusSupport {
 		bridgeToModuleChannel.setBeanName(name + ".bridge");
 		adapter.setOutputChannel(bridgeToModuleChannel);
 		adapter.setBeanName("inbound." + name);
+		adapter.setBeanFactory(getBeanFactory());
 		adapter.afterPropertiesSet();
 		adapter.start();
 		Binding consumerBinding = Binding.forConsumer(name, adapter, requests, accessor);
@@ -510,11 +513,10 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 		MessageHandler sendingMessageHandler = createTopicProducerHandler(accessor, requestsTopicName);
 		String replyQueueName = name + ".replies." + this.getIdGenerator().generateId();
-		Assert.isInstanceOf(SubscribableChannel.class, requests);
 
-		MessageHandler handler = new SendingHandler(sendingMessageHandler, null, replyQueueName, accessor, 1, parser
-				.parseExpression("headers['" + REPLY_TO + "']"));
-		EventDrivenConsumer consumer = new EventDrivenConsumer((SubscribableChannel) requests, handler);
+		MessageHandler handler = new SendingHandler(sendingMessageHandler, null, replyQueueName, accessor, 1,
+				parser.parseExpression("headers['" + REPLY_TO + "']"));
+		EventDrivenConsumer consumer = new EventDrivenConsumer((SubscribableChannel) replies, handler);
 		consumer.setBeanFactory(this.getBeanFactory());
 		consumer.setBeanName("outbound." + name);
 		consumer.afterPropertiesSet();
@@ -774,7 +776,7 @@ public class KafkaMessageBus extends MessageBusSupport {
 			try {
 				theRequestMessage = embeddedHeadersMessageConverter.extractHeaders((Message<byte[]>) requestMessage);
 				System.out.println("Received:");
-				for (Map.Entry<String,Object> o : theRequestMessage.getHeaders().entrySet()	) {
+				for (Map.Entry<String, Object> o : theRequestMessage.getHeaders().entrySet()) {
 					System.out.println(o.getKey() + "=" + o.getValue());
 				}
 			}
@@ -873,7 +875,7 @@ public class KafkaMessageBus extends MessageBusSupport {
 			System.out.println("Sending with headers:");
 
 			for (Map.Entry<String, Object> stringObjectEntry : additionalHeaders.entrySet()) {
-					System.out.println(stringObjectEntry.getKey() + "=" + stringObjectEntry.getValue());
+				System.out.println(stringObjectEntry.getKey() + "=" + stringObjectEntry.getValue());
 			}
 
 			@SuppressWarnings("unchecked")
