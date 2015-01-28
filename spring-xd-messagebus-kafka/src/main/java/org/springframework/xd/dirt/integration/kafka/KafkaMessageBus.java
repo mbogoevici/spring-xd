@@ -439,17 +439,19 @@ public class KafkaMessageBus extends MessageBusSupport {
 		validateProducerProperties(name, properties, PRODUCER_STANDARD_PROPERTIES);
 		KafkaPropertiesAccessor accessor = new KafkaPropertiesAccessor(properties);
 
-		// create producer
+		// create topics
 		String requestsTopicName = escapeTopicName("queue." + name + ".requests");
 		ensureTopicCreated(requestsTopicName, 1, 1);
 		MessageHandler sendingMessageHandler = createTopicProducerHandler(accessor, requestsTopicName);
 
-		String replyTopicName = name + ".replies." + this.getIdGenerator().generateId();
-		ensureTopicCreated(escapeTopicName(replyTopicName), 1, defaultReplicationFactor);
+		String replyTopicName = escapeTopicName(name + ".replies." + this.getIdGenerator().generateId());
+		ensureTopicCreated(replyTopicName, 1, defaultReplicationFactor);
 
+		// create producer - sends requests on requestTopicName
 		Assert.isInstanceOf(SubscribableChannel.class, requests);
-		MessageHandler handler = new SendingHandler(sendingMessageHandler, requestsTopicName, replyTopicName, accessor, 1, null);
-		EventDrivenConsumer sendingBridgeConsumer = new EventDrivenConsumer((SubscribableChannel) requests, handler);
+		MessageHandler sendingHandler = new SendingHandler(sendingMessageHandler, requestsTopicName, replyTopicName,
+				accessor, 1, null);
+		EventDrivenConsumer sendingBridgeConsumer = new EventDrivenConsumer((SubscribableChannel) requests, sendingHandler);
 		sendingBridgeConsumer.setBeanFactory(this.getBeanFactory());
 		sendingBridgeConsumer.setBeanName("outbound." + name);
 		sendingBridgeConsumer.afterPropertiesSet();
@@ -459,24 +461,29 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 		// create consumer
 		KafkaMessageDrivenChannelAdapter adapter = new KafkaMessageDrivenChannelAdapter(createMessageListenerContainer
-				(POINT_TO_POINT_SEMANTICS_CONSUMER_GROUP, accessor.getConcurrency(1),
-						connectionFactory.getPartitions(escapeTopicName(replyTopicName)), OffsetRequest.EarliestTime()));
-		DirectChannel bridgeToModuleChannel = new DirectChannel();
-		bridgeToModuleChannel.setBeanFactory(this.getBeanFactory());
-		bridgeToModuleChannel.setBeanName(name + ".bridge");
-		adapter.setOutputChannel(bridgeToModuleChannel);
+				(UUID.randomUUID().toString(), accessor.getConcurrency(1),
+						connectionFactory.getPartitions(replyTopicName), OffsetRequest.LatestTime()));
+		DirectChannel conversionChannel = new DirectChannel();
+		conversionChannel.setBeanFactory(this.getBeanFactory());
+		conversionChannel.setBeanName(name + ".bridge");
+		adapter.setOutputChannel(conversionChannel);
 		adapter.setBeanName("inbound." + name);
 		adapter.afterPropertiesSet();
 		adapter.setBeanFactory(getBeanFactory());
 		adapter.start();
 		Binding consumerBinding = Binding.forConsumer(name, adapter, replies, accessor);
 		addBinding(consumerBinding);
-		ReceivingHandler convertingBridge = new ReceivingHandler(adapter);
-		convertingBridge.setOutputChannel(replies);
-		convertingBridge.setBeanName(name + ".bridge.handler");
-		convertingBridge.afterPropertiesSet();
-		bridgeToModuleChannel.subscribe(convertingBridge);
+		ReceivingHandler convertingReceivingHandler = new ReceivingHandler(adapter);
+		convertingReceivingHandler.setOutputChannel(replies);
+		convertingReceivingHandler.setBeanName(name + ".bridge.handler");
+		convertingReceivingHandler.afterPropertiesSet();
+		conversionChannel.subscribe(convertingReceivingHandler);
 		consumerBinding.start();
+
+		if (logger.isInfoEnabled()) {
+			logger.info("Bound requestor: " + name  + " sending requests to " + requestsTopicName + " and sending replies " +
+					"to " + replyTopicName);
+		}
 	}
 
 	@Override
@@ -491,8 +498,8 @@ public class KafkaMessageBus extends MessageBusSupport {
 		ensureTopicCreated(requestsTopicName, 1, defaultReplicationFactor);
 
 		KafkaMessageDrivenChannelAdapter adapter = new KafkaMessageDrivenChannelAdapter(createMessageListenerContainer
-				(POINT_TO_POINT_SEMANTICS_CONSUMER_GROUP, accessor.getConcurrency(1),
-						connectionFactory.getPartitions(requestsTopicName), OffsetRequest.EarliestTime()));
+				(UUID.randomUUID().toString(), accessor.getConcurrency(1),
+						connectionFactory.getPartitions(requestsTopicName), OffsetRequest.LatestTime()));
 		DirectChannel bridgeToModuleChannel = new DirectChannel();
 		bridgeToModuleChannel.setBeanFactory(this.getBeanFactory());
 		bridgeToModuleChannel.setBeanName(name + ".bridge");
@@ -512,9 +519,8 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 
 		MessageHandler sendingMessageHandler = createTopicProducerHandler(accessor, requestsTopicName);
-		String replyQueueName = name + ".replies." + this.getIdGenerator().generateId();
 
-		MessageHandler handler = new SendingHandler(sendingMessageHandler, null, replyQueueName, accessor, 1,
+		MessageHandler handler = new SendingHandler(sendingMessageHandler, null, null, accessor, 1,
 				parser.parseExpression("headers['" + REPLY_TO + "']"));
 		EventDrivenConsumer consumer = new EventDrivenConsumer((SubscribableChannel) replies, handler);
 		consumer.setBeanFactory(this.getBeanFactory());
@@ -523,6 +529,10 @@ public class KafkaMessageBus extends MessageBusSupport {
 		Binding producerBinding = Binding.forProducer(name, replies, consumer, accessor);
 		addBinding(producerBinding);
 		producerBinding.start();
+
+		if (logger.isInfoEnabled()) {
+			logger.info("Bound replier: " + name  + " listening to " + requestsTopicName);
+		}
 	}
 
 	/**
