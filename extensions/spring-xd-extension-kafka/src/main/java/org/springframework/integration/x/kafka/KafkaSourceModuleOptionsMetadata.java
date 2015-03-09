@@ -28,7 +28,7 @@ import org.springframework.xd.module.options.spi.ProfileNamesProvider;
  * @author Ilayaperumal Gopinathan
  * @author Marius Bogoevici
  */
-@Mixin({KafkaZKOptionMixin.class, KafkaConsumerOptionsMixin.class})
+@Mixin({KafkaZKOptionMixin.class, KafkaConsumerOptionsMixin.class, KafkaOffsetTopicOptionsMixin.class})
 public class KafkaSourceModuleOptionsMetadata implements ProfileNamesProvider {
 
 	private String topic = ModulePlaceholders.XD_STREAM_NAME;
@@ -119,8 +119,9 @@ public class KafkaSourceModuleOptionsMetadata implements ProfileNamesProvider {
 	public String[] profilesToActivate() {
 		if (offsetStorage != null) {
 			return new String[] {String.format("%s-offset-manager", offsetStorage)};
-		} else {
+		}
+		else {
 			throw new IllegalStateException("An offset storage strategy must be configured");
 		}
- 	}
+	}
 }
