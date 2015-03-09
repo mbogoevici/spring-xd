@@ -55,6 +55,7 @@ import org.springframework.integration.kafka.support.ProducerConfiguration;
 import org.springframework.integration.kafka.support.ProducerFactoryBean;
 import org.springframework.integration.kafka.support.ProducerMetadata;
 import org.springframework.integration.kafka.support.ZookeeperConnect;
+import org.springframework.integration.x.kafka.WindowingOffsetManager;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.MessageHandler;
@@ -662,29 +663,29 @@ public class KafkaMessageBus extends MessageBusSupport {
 		}
 		// if we have less target partitions than target concurrency, adjust accordingly
 		messageListenerContainer.setConcurrency(Math.min(numThreads, listenedPartitions.size()));
-		KafkaTopicOffsetManager offsetManager = createOffsetManager(group, referencePoint);
+		OffsetManager offsetManager = createOffsetManager(group, referencePoint);
 		messageListenerContainer.setOffsetManager(offsetManager);
 		return messageListenerContainer;
 	}
 
-	private KafkaTopicOffsetManager createOffsetManager(String group, long referencePoint) {
-		KafkaTopicOffsetManager offsetManager =
+	private OffsetManager createOffsetManager(String group, long referencePoint) {
+		KafkaTopicOffsetManager kafkaOffsetManager =
 				new KafkaTopicOffsetManager(zookeeperConnect, offsetStoreTopic, Collections.<Partition, Long>emptyMap());
-		offsetManager.setConsumerId(group);
-		offsetManager.setReferenceTimestamp(referencePoint);
-		offsetManager.setSegmentSize(offsetStoreSegmentSize);
-		offsetManager.setRetentionTime(offsetStoreRetentionTime);
-		offsetManager.setRequiredAcks(offsetStoreRequiredAcks);
-		offsetManager.setMaxSize(offsetStoreMaxSize);
-		offsetManager.setMaxBatchSize(offsetTopicBatchSize);
-		offsetManager.setMaxQueueBufferingTime(offsetTopicBatchTime);
+		kafkaOffsetManager.setConsumerId(group);
+		kafkaOffsetManager.setReferenceTimestamp(referencePoint);
+		kafkaOffsetManager.setSegmentSize(offsetStoreSegmentSize);
+		kafkaOffsetManager.setRetentionTime(offsetStoreRetentionTime);
+		kafkaOffsetManager.setRequiredAcks(offsetStoreRequiredAcks);
+		kafkaOffsetManager.setMaxSize(offsetStoreMaxSize);
+		kafkaOffsetManager.setMaxBatchSize(offsetTopicBatchSize);
+		kafkaOffsetManager.setMaxQueueBufferingTime(offsetTopicBatchTime);
 		try {
-			offsetManager.afterPropertiesSet();
+			kafkaOffsetManager.afterPropertiesSet();
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);
 		}
-		return offsetManager;
+		return new WindowingOffsetManager(kafkaOffsetManager);
 	}
 
 	private class KafkaPropertiesAccessor extends AbstractBusPropertiesAccessor {
