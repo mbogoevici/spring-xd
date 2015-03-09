@@ -108,8 +108,14 @@
 	<beans profile="kafka-offset-manager">
 		<bean id="offsetManager" class="org.springframework.integration.kafka.listener.KafkaTopicOffsetManager">
 			<constructor-arg index="0" ref="kafkaSourceZookeeperConnect"/>
-			<constructor-arg index="1" value="${xd.stream.name}-${xd.module.name}-offsets"/>
+			<constructor-arg index="1" value="${kafkaOffsetTopicName}"/>
 			<constructor-arg index="2" ref="initialOffsetsMap"/>
+			<property name="segmentSize" value="${kafkaOffsetTopicSegmentSize}"/>
+			<property name="retentionTime" value="${kafkaOffsetTopicRetentionTime}"/>
+			<property name="maxSize" value="${kafkaOffsetTopicMaxSize}"/>
+			<property name="maxBatchSize" value="${kafkaOffsetTopicBatchSize}"/>
+			<property name="maxQueueBufferingTime" value="${kafkaOffsetTopicBatchTime}"/>
+			<property name="requiredAcks" value="${kafkaOffsetTopicRequiredAcks}"/>
 			<property name="consumerId" value="${groupId}"/>
 			<property name="referenceTimestamp" value="${autoOffsetResetValue}"/>
 		</bean>
