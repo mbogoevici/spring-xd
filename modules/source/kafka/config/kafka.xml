@@ -49,7 +49,11 @@
 		<constructor-arg index="0" ref="connectionFactory"/>
 		<constructor-arg index="1" ref="partitions"/>
 		<property name="maxFetch" value="${fetchMaxBytes}"/>
-		<property name="offsetManager" ref="offsetManager"/>
+		<property name="offsetManager">
+			<bean class="org.springframework.integration.x.kafka.WindowingOffsetManager">
+				<constructor-arg ref="offsetManager"/>
+			</bean>
+		</property>
 		<property name="concurrency" value="${streams}"/>
 	</bean>
 

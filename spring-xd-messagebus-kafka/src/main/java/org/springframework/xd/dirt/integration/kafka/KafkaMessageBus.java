@@ -669,23 +669,28 @@ public class KafkaMessageBus extends MessageBusSupport {
 	}
 
 	private OffsetManager createOffsetManager(String group, long referencePoint) {
-		KafkaTopicOffsetManager kafkaOffsetManager =
-				new KafkaTopicOffsetManager(zookeeperConnect, offsetStoreTopic, Collections.<Partition, Long>emptyMap());
-		kafkaOffsetManager.setConsumerId(group);
-		kafkaOffsetManager.setReferenceTimestamp(referencePoint);
-		kafkaOffsetManager.setSegmentSize(offsetStoreSegmentSize);
-		kafkaOffsetManager.setRetentionTime(offsetStoreRetentionTime);
-		kafkaOffsetManager.setRequiredAcks(offsetStoreRequiredAcks);
-		kafkaOffsetManager.setMaxSize(offsetStoreMaxSize);
-		kafkaOffsetManager.setMaxBatchSize(offsetTopicBatchSize);
-		kafkaOffsetManager.setMaxQueueBufferingTime(offsetTopicBatchTime);
 		try {
+			KafkaTopicOffsetManager kafkaOffsetManager =
+					new KafkaTopicOffsetManager(zookeeperConnect, offsetStoreTopic, Collections.<Partition, Long>emptyMap());
+			kafkaOffsetManager.setConsumerId(group);
+			kafkaOffsetManager.setReferenceTimestamp(referencePoint);
+			kafkaOffsetManager.setSegmentSize(offsetStoreSegmentSize);
+			kafkaOffsetManager.setRetentionTime(offsetStoreRetentionTime);
+			kafkaOffsetManager.setRequiredAcks(offsetStoreRequiredAcks);
+			kafkaOffsetManager.setMaxSize(offsetStoreMaxSize);
+			kafkaOffsetManager.setMaxBatchSize(offsetTopicBatchSize);
+			kafkaOffsetManager.setMaxQueueBufferingTime(offsetTopicBatchTime);
+
 			kafkaOffsetManager.afterPropertiesSet();
+
+			WindowingOffsetManager windowingOffsetManager = new WindowingOffsetManager(kafkaOffsetManager);
+
+			windowingOffsetManager.afterPropertiesSet();
+			return windowingOffsetManager;
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);
 		}
-		return new WindowingOffsetManager(kafkaOffsetManager);
 	}
 
 	private class KafkaPropertiesAccessor extends AbstractBusPropertiesAccessor {

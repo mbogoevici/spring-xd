@@ -155,7 +155,7 @@ xd:
       offsetTopicBatchSize:                    200
       offsetTopicBatchTime:                    1000
       default:
-        batchingEnabled:           false
+        batchingEnabled:           true
         batchSize:                 200
         batchTimeout:              5000
         replicationFactor:         1
