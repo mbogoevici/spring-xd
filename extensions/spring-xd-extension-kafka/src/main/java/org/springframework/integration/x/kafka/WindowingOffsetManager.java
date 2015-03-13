@@ -20,16 +20,15 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.concurrent.TimeUnit;
 
-import org.reactivestreams.Publisher;
-import reactor.Environment;
-import reactor.fn.BiFunction;
-import reactor.fn.Consumer;
-import reactor.fn.Function;
-import reactor.fn.tuple.Tuple;
-import reactor.fn.tuple.Tuple2;
-import reactor.rx.BiStreams;
-import reactor.rx.Stream;
-import reactor.rx.broadcast.Broadcaster;
+import rx.Observable;
+import rx.functions.Action1;
+import rx.functions.Func1;
+import rx.functions.Func2;
+import rx.observables.GroupedObservable;
+import rx.observables.MathObservable;
+import rx.subjects.PublishSubject;
+import rx.subjects.SerializedSubject;
+import rx.subjects.Subject;
 
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.integration.kafka.core.Partition;
@@ -40,23 +39,14 @@ import org.springframework.integration.kafka.listener.OffsetManager;
  */
 public class WindowingOffsetManager implements OffsetManager, InitializingBean {
 
-	private final Environment environment;
-
 	private OffsetManager delegate;
-
-	private Broadcaster<Tuple2<Partition, Long>> offsets;
-
-	private int windowSize = 100;
 
 	private int timespan = 10;
 
-	public WindowingOffsetManager(OffsetManager offsetManager) {
-		environment = Environment.initializeIfEmpty();
-		this.delegate = offsetManager;
-	}
+	private Subject<PartitionAndOffset, PartitionAndOffset> offsets;
 
-	public void setWindowSize(int windowSize) {
-		this.windowSize = windowSize;
+	public WindowingOffsetManager(OffsetManager offsetManager) {
+		this.delegate = offsetManager;
 	}
 
 	public void setTimespan(int timespan) {
@@ -65,30 +55,48 @@ public class WindowingOffsetManager implements OffsetManager, InitializingBean {
 
 	@Override
 	public void afterPropertiesSet() throws Exception {
-		offsets = Broadcaster.create(environment);
+		offsets = new SerializedSubject(PublishSubject.<PartitionAndOffset>create());
 		offsets
-				.window(windowSize, timespan, TimeUnit.SECONDS).flatMap(new Function<Stream<Tuple2<Partition, Long>>, Publisher<Tuple2<Partition, Long>>>() {
+				.window(10, TimeUnit.SECONDS)
+				.flatMap(new Func1<Observable<PartitionAndOffset>, Observable<PartitionAndOffset>>() {
+					@Override
+					public Observable<PartitionAndOffset> call(Observable<PartitionAndOffset> windowBuffer) {
+						return windowBuffer.groupBy(new Func1<PartitionAndOffset, Partition>() {
+							@Override
+							public Partition call(PartitionAndOffset partitionAndOffset) {
+								return partitionAndOffset.getPartition();
+							}
+						}).flatMap(new Func1<GroupedObservable<Partition, PartitionAndOffset>, Observable<PartitionAndOffset>>() {
+							@Override
+							public Observable<PartitionAndOffset> call(GroupedObservable<Partition, PartitionAndOffset> group) {
+								return Observable.zip(
+										Observable.just(group.getKey()),
+										MathObservable.max(group.map(new Func1<PartitionAndOffset, Long>() {
+											@Override
+											public Long call(PartitionAndOffset partitionAndOffset) {
+												return partitionAndOffset.getOffset();
+											}
+										})), new Func2<Partition, Long, PartitionAndOffset>() {
+											@Override
+											public PartitionAndOffset call(Partition partition, Long offset) {
+												return new PartitionAndOffset(partition, offset);
+											}
+										}
+								);
+							}
+						});
+					}
+				}).subscribe(new Action1<PartitionAndOffset>() {
 			@Override
-			public Publisher<Tuple2<Partition, Long>> apply(Stream<Tuple2<Partition, Long>> tuple2Stream) {
-				return BiStreams.reduceByKey(tuple2Stream, new BiFunction<Long, Long, Long>() {
-					@Override
-					public Long apply(Long aLong, Long aLong2) {
-						return Math.max(aLong, aLong2);
-					}
-				});
+			public void call(PartitionAndOffset partitionAndOffset) {
+				delegate.updateOffset(partitionAndOffset.getPartition(), partitionAndOffset.getOffset());
 			}
-		})
-				.consume(new Consumer<Tuple2<Partition, Long>>() {
-					@Override
-					public void accept(Tuple2<Partition, Long> partitionLongTuple2) {
-						delegate.updateOffset(partitionLongTuple2.getT1(), partitionLongTuple2.getT2());
-					}
-				});
+		});
 	}
 
 	@Override
 	public void updateOffset(Partition partition, long offset) {
-		offsets.onNext(Tuple.of(partition, offset));
+		offsets.onNext(new PartitionAndOffset(partition, offset));
 	}
 
 	@Override
@@ -114,5 +122,25 @@ public class WindowingOffsetManager implements OffsetManager, InitializingBean {
 	@Override
 	public void flush() throws IOException {
 		delegate.flush();
+	}
+
+	class PartitionAndOffset {
+
+		private Partition partition;
+
+		private Long offset;
+
+		public PartitionAndOffset(Partition partition, Long offset) {
+			this.partition = partition;
+			this.offset = offset;
+		}
+
+		public Partition getPartition() {
+			return partition;
+		}
+
+		public Long getOffset() {
+			return offset;
+		}
 	}
 }
