@@ -55,6 +55,7 @@ import org.springframework.integration.kafka.support.ProducerConfiguration;
 import org.springframework.integration.kafka.support.ProducerFactoryBean;
 import org.springframework.integration.kafka.support.ProducerMetadata;
 import org.springframework.integration.kafka.support.ZookeeperConnect;
+import org.springframework.integration.support.MessageBuilder;
 import org.springframework.integration.x.kafka.WindowingOffsetManager;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
@@ -771,6 +772,11 @@ public class KafkaMessageBus extends MessageBusSupport {
 			return true;
 		}
 
+		@Override
+		protected boolean shouldCopyRequestHeaders() {
+			// prevent the message from being copied again in superclass
+			return false;
+		}
 	}
 
 	private class SendingHandler extends AbstractMessageHandler {

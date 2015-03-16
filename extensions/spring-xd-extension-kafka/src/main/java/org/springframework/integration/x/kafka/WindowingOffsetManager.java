@@ -21,6 +21,7 @@ import java.util.Collection;
 import java.util.concurrent.TimeUnit;
 
 import rx.Observable;
+import rx.Subscription;
 import rx.functions.Action1;
 import rx.functions.Func1;
 import rx.functions.Func2;
@@ -45,6 +46,8 @@ public class WindowingOffsetManager implements OffsetManager, InitializingBean {
 
 	private Subject<PartitionAndOffset, PartitionAndOffset> offsets;
 
+	private Subscription subscription;
+
 	public WindowingOffsetManager(OffsetManager offsetManager) {
 		this.delegate = offsetManager;
 	}
@@ -56,8 +59,8 @@ public class WindowingOffsetManager implements OffsetManager, InitializingBean {
 	@Override
 	public void afterPropertiesSet() throws Exception {
 		offsets = new SerializedSubject(PublishSubject.<PartitionAndOffset>create());
-		offsets
-				.window(10, TimeUnit.SECONDS)
+		subscription = offsets
+				.window(timespan, TimeUnit.SECONDS)
 				.flatMap(new Func1<Observable<PartitionAndOffset>, Observable<PartitionAndOffset>>() {
 					@Override
 					public Observable<PartitionAndOffset> call(Observable<PartitionAndOffset> windowBuffer) {
@@ -87,11 +90,12 @@ public class WindowingOffsetManager implements OffsetManager, InitializingBean {
 						});
 					}
 				}).subscribe(new Action1<PartitionAndOffset>() {
-			@Override
-			public void call(PartitionAndOffset partitionAndOffset) {
-				delegate.updateOffset(partitionAndOffset.getPartition(), partitionAndOffset.getOffset());
-			}
-		});
+					@Override
+					public void call(PartitionAndOffset partitionAndOffset) {
+						System.out.println("Writing offset ...");
+						delegate.updateOffset(partitionAndOffset.getPartition(), partitionAndOffset.getOffset());
+					}
+				});
 	}
 
 	@Override
@@ -116,6 +120,7 @@ public class WindowingOffsetManager implements OffsetManager, InitializingBean {
 
 	@Override
 	public void close() throws IOException {
+		subscription.unsubscribe();
 		delegate.close();
 	}
 
