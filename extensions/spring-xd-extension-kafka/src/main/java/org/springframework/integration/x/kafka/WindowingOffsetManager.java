@@ -19,9 +19,11 @@ package org.springframework.integration.x.kafka;
 import java.io.IOException;
 import java.util.Collection;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import rx.Observable;
+import rx.Scheduler;
 import rx.Subscription;
 import rx.functions.Action0;
 import rx.functions.Action1;
@@ -29,6 +31,7 @@ import rx.functions.Func1;
 import rx.functions.Func2;
 import rx.observables.GroupedObservable;
 import rx.observables.MathObservable;
+import rx.schedulers.Schedulers;
 import rx.subjects.PublishSubject;
 import rx.subjects.SerializedSubject;
 import rx.subjects.Subject;
@@ -119,7 +122,7 @@ public class WindowingOffsetManager implements OffsetManager, InitializingBean, 
 		// create the stream if windowing is set, and count is higher than 1
 		if (timespan > 0 || count > 1) {
 			offsets = new SerializedSubject(PublishSubject.<PartitionAndOffset>create());
-			// window by either count or tm
+			// window by either count or time
 			Observable<Observable<PartitionAndOffset>> window =
 					timespan > 0 ? offsets.window(timespan, TimeUnit.MILLISECONDS) : offsets.window(count);
 			Observable<PartitionAndOffset> maximumOffsetsByWindow = window
