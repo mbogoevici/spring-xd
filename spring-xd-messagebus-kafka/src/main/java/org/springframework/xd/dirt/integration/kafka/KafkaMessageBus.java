@@ -148,6 +148,8 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 	private static final String DEFAULT_COMPRESSION_CODEC = "default";
 
+	public static final String KAFKA_MIN_PARTITION_COUNT = "minPartitionCount";
+
 	private static final int DEFAULT_REQUIRED_ACKS = 1;
 
 	private RetryOperations retryOperations;
@@ -199,6 +201,10 @@ public class KafkaMessageBus extends MessageBusSupport {
 			.add(BusProperties.CONCURRENCY)
 			.build();
 
+	private static final Set<Object> KAFKA_PRODUCER_PROPERTIES = new SetBuilder()
+			.add(KAFKA_MIN_PARTITION_COUNT)
+			.build();
+
 	/**
 	 * Basic + concurrency.
 	 */
@@ -218,6 +224,7 @@ public class KafkaMessageBus extends MessageBusSupport {
 			.addAll(PRODUCER_PARTITIONING_PROPERTIES)
 			.addAll(PRODUCER_STANDARD_PROPERTIES)
 			.add(BusProperties.DIRECT_BINDING_ALLOWED)
+			.addAll(KAFKA_PRODUCER_PROPERTIES)
 			.addAll(PRODUCER_BATCHING_BASIC_PROPERTIES)
 			.addAll(PRODUCER_COMPRESSION_PROPERTIES)
 			.build();
@@ -339,10 +346,14 @@ public class KafkaMessageBus extends MessageBusSupport {
 		this.offsetStoreBatchTime = offsetStoreBatchTime;
 	}
 
+	public ConnectionFactory getConnectionFactory() {
+		return connectionFactory;
+	}
+
 	/**
 	 * Retry configuration for operations such as validating topic creation
 	 *
-	 * @param retryOperations
+	 * @param retryOperations the retry configuration
 	 */
 	public void setRetryOperations(RetryOperations retryOperations) {
 		this.retryOperations = retryOperations;
@@ -449,6 +460,7 @@ public class KafkaMessageBus extends MessageBusSupport {
 			}
 
 			final String topicName = escapeTopicName(name);
+
 			int numPartitions = accessor.getNumberOfKafkaPartitionsForProducer();
 
 			TopicMetadata targetTopicMetadata = ensureTopicCreated(topicName, numPartitions, defaultReplicationFactor);
@@ -737,15 +749,16 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 		public int getNumberOfKafkaPartitionsForProducer() {
 			int concurrency = getProperty(NEXT_MODULE_CONCURRENCY, defaultConcurrency);
+			int kafkaPartitions = getKafkaPartitionCount(0);
 			if (new PartitioningMetadata(this).isPartitionedModule()) {
-				return getPartitionCount() * concurrency;
+				return Math.max(kafkaPartitions, getPartitionCount() * concurrency);
 			}
 			else {
 				int nextModuleCount = getProperty(NEXT_MODULE_COUNT, 1);
 				if (nextModuleCount == 0) {
 					throw new IllegalArgumentException("Module count cannot be zero");
 				}
-				return nextModuleCount * concurrency;
+				return Math.max(kafkaPartitions,nextModuleCount * concurrency);
 			}
 		}
 
@@ -755,6 +768,10 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 		public int getRequiredAcks(int defaultRequiredAcks) {
 			return getProperty(REQUIRED_ACKS, defaultRequiredAcks);
+		}
+
+		public int getKafkaPartitionCount(int defaultPartitionCount) {
+			return getProperty(KAFKA_MIN_PARTITION_COUNT, defaultPartitionCount);
 		}
 
 	}
