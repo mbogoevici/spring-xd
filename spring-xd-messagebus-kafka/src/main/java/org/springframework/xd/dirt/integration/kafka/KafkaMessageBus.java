@@ -86,14 +86,11 @@ import kafka.api.OffsetRequest;
 import kafka.api.TopicMetadata;
 import kafka.common.ErrorMapping;
 import kafka.javaapi.PartitionMetadata;
-import kafka.javaapi.producer.Producer;
-import kafka.producer.DefaultPartitioner;
-import kafka.producer.KeyedMessage;
 import kafka.serializer.Decoder;
 import kafka.serializer.DefaultDecoder;
-import kafka.serializer.DefaultEncoder;
-import kafka.serializer.StringEncoder;
 import kafka.utils.ZkUtils;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
 import scala.collection.Seq;
 
 /**
@@ -133,6 +130,8 @@ import scala.collection.Seq;
  */
 public class KafkaMessageBus extends MessageBusSupport {
 
+	public static final ByteArraySerializer BYTE_ARRAY_SERIALIZER = new ByteArraySerializer();
+
 	private final AtomicInteger correlationIdCounter = new AtomicInteger(new Random().nextInt());
 
 	public static final int METADATA_VERIFICATION_RETRY_ATTEMPTS = 10;
@@ -163,7 +162,7 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 	public static final String AUTO_COMMIT_ENABLED = "autoCommitEnabled";
 
-	private static final String DEFAULT_COMPRESSION_CODEC = "default";
+	private static final String DEFAULT_COMPRESSION_CODEC = "none";
 
 	public static final String KAFKA_MIN_PARTITION_COUNT = "minPartitionCount";
 
@@ -295,7 +294,7 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 	private boolean offsetStoreBatchEnabled = false;
 
-	private int offsetStoreBatchSize = 200;
+	private int offsetStoreBatchBytes = 200;
 
 	private int offsetStoreBatchTime = 1000;
 
@@ -366,8 +365,8 @@ public class KafkaMessageBus extends MessageBusSupport {
 		this.offsetStoreBatchEnabled = offsetStoreBatchEnabled;
 	}
 
-	public void setOffsetStoreBatchSize(int offsetStoreBatchSize) {
-		this.offsetStoreBatchSize = offsetStoreBatchSize;
+	public void setOffsetStoreBatchBytes(int offsetStoreBatchBytes) {
+		this.offsetStoreBatchBytes = offsetStoreBatchBytes;
 	}
 
 	public void setOffsetStoreBatchTime(int offsetStoreBatchTime) {
@@ -509,34 +508,22 @@ public class KafkaMessageBus extends MessageBusSupport {
 			TopicMetadata targetTopicMetadata = ensureTopicCreated(topicName, numPartitions, defaultReplicationFactor);
 
 
-			ProducerMetadata<String, byte[]> producerMetadata = new ProducerMetadata<String, byte[]>(
-					topicName);
-			producerMetadata.setValueEncoder(new DefaultEncoder(null));
-			producerMetadata.setValueClassType(byte[].class);
-			producerMetadata.setKeyEncoder(new StringEncoder(null));
-			producerMetadata.setKeyClassType(String.class);
-			producerMetadata.setCompressionCodec(accessor.getCompressionCodec(this.defaultCompressionCodec));
-			producerMetadata.setPartitioner(new DefaultPartitioner(null));
-
+			ProducerMetadata<byte[], byte[]> producerMetadata = new ProducerMetadata<>(
+					topicName, byte[].class, byte[].class, BYTE_ARRAY_SERIALIZER, BYTE_ARRAY_SERIALIZER);
+			producerMetadata.setCompressionType(ProducerMetadata.CompressionType.valueOf(
+					accessor.getCompressionCodec(this.defaultCompressionCodec)));
+			producerMetadata.setBatchBytes(accessor.getBatchSize(this.defaultBatchSize));
 			Properties additionalProps = new Properties();
-			additionalProps.put("request.required.acks", String.valueOf(accessor.getRequiredAcks(this
+			additionalProps.put(ProducerConfig.ACKS_CONFIG, String.valueOf(accessor.getRequiredAcks(this
 					.defaultRequiredAcks)));
-			if (accessor.isBatchingEnabled(this.defaultBatchingEnabled)) {
-				producerMetadata.setAsync(true);
-				producerMetadata.setBatchNumMessages(String.valueOf(accessor.getBatchSize(this.defaultBatchSize)));
-				additionalProps.put("queue.buffering.max.ms", String.valueOf(accessor.getBatchTimeout(this
-						.defaultBatchTimeout)));
-			}
-
-			ProducerFactoryBean<String, byte[]> producerFB =
-					new ProducerFactoryBean<String, byte[]>(producerMetadata, brokers, additionalProps);
+			additionalProps.put(ProducerConfig.LINGER_MS_CONFIG, String.valueOf(accessor.getBatchTimeout(this
+					.defaultBatchTimeout)));
+			ProducerFactoryBean<byte[], byte[]> producerFB =
+					new ProducerFactoryBean<>(producerMetadata, brokers, additionalProps);
 
 			try {
-				final Producer<String, byte[]> producer = producerFB.getObject();
-
-
-				final ProducerConfiguration<String, byte[]> producerConfiguration
-						= new ProducerConfiguration<String, byte[]>(producerMetadata, producer);
+				final ProducerConfiguration<byte[], byte[]> producerConfiguration
+						= new ProducerConfiguration<>(producerMetadata, producerFB.getObject());
 
 				MessageHandler messageHandler = new AbstractMessageHandler() {
 
@@ -544,10 +531,8 @@ public class KafkaMessageBus extends MessageBusSupport {
 					protected void handleMessageInternal(Message<?> message) throws Exception {
 						// strip off the message key used internally by the bus and use a partitioning key for 
 						// partitioning
-						producerConfiguration.getProducer()
-								.send(new KeyedMessage<String, byte[]>(topicName, null,
-										message.getHeaders().get("messageKey", Integer.class),
-										(byte[]) message.getPayload()));
+						producerConfiguration.send(topicName, message.getHeaders().get("messageKey", Integer.class),
+								null, (byte[]) message.getPayload());
 					}
 				};
 
@@ -628,6 +613,9 @@ public class KafkaMessageBus extends MessageBusSupport {
 						for (PartitionMetadata partitionMetadata : partitionMetadatas) {
 							if (partitionMetadata.errorCode() != ErrorMapping.NoError()) {
 								throw (Exception) ErrorMapping.exceptionFor(partitionMetadata.errorCode());
+							}
+							if (partitionMetadata.leader() == null) {
+								throw (Exception) ErrorMapping.exceptionFor(ErrorMapping.LeaderNotAvailableCode());
 							}
 						}
 						return topicMetadata;
@@ -799,8 +787,7 @@ public class KafkaMessageBus extends MessageBusSupport {
 			kafkaOffsetManager.setRetentionTime(offsetStoreRetentionTime);
 			kafkaOffsetManager.setRequiredAcks(offsetStoreRequiredAcks);
 			kafkaOffsetManager.setMaxSize(offsetStoreMaxFetchSize);
-			kafkaOffsetManager.setBatchWrites(offsetStoreBatchEnabled);
-			kafkaOffsetManager.setMaxBatchSize(offsetStoreBatchSize);
+			kafkaOffsetManager.setBatchBytes(offsetStoreBatchBytes);
 			kafkaOffsetManager.setMaxQueueBufferingTime(offsetStoreBatchTime);
 
 			kafkaOffsetManager.afterPropertiesSet();
@@ -937,11 +924,11 @@ public class KafkaMessageBus extends MessageBusSupport {
 				int springXdPartition = determinePartition(message, partitioningMetadata);
 				// in order to do so, we will generate a number whose modulus when applied to total partition count
 				// is equal to springXdPartition
-				partition = (roundRobin() % factor) * partitioningMetadata.getPartitionCount() + springXdPartition;
+				partition =
+						((roundRobin() % factor) * partitioningMetadata.getPartitionCount() + springXdPartition) % numberOfKafkaPartitions;
 			}
 			else {
-				// The value will be modulo-ed by numPartitions by Kafka itself
-				partition = roundRobin();
+				partition = roundRobin() % numberOfKafkaPartitions;
 			}
 
 			MessageValues transformed = serializePayloadIfNecessary(message,

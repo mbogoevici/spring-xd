@@ -112,7 +112,7 @@ public abstract class MessageBusSupport
 
 	private static final int DEFAULT_BATCH_BUFFER_LIMIT = 10000;
 
-	private static final int DEFAULT_BATCH_TIMEOUT = 5000;
+	private static final int DEFAULT_BATCH_TIMEOUT = 0;
 
 	/**
 	 * The set of properties every bus implementation must support (or at least tolerate).
