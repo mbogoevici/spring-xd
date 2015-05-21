@@ -33,6 +33,7 @@ import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -617,7 +618,7 @@ public abstract class MessageBusSupport
 
 	private Object deserializePayload(Object payload, MimeType contentType) {
 		if (payload instanceof byte[]) {
-			if (APPLICATION_OCTET_STREAM.equals(contentType)) {
+			if (contentType == null || APPLICATION_OCTET_STREAM.equals(contentType)) {
 				return payload;
 			}
 			else {
@@ -630,7 +631,7 @@ public abstract class MessageBusSupport
 	private Object deserializePayload(byte[] bytes, MimeType contentType) {
 		Class<?> targetType = null;
 		try {
-			if (contentType.equals(TEXT_PLAIN)) {
+			if (TEXT_PLAIN.equals(contentType)) {
 				return new String(bytes, "UTF-8");
 			}
 			String className = JavaClassMimeTypeConversion.classNameFromMimeType(contentType);
@@ -1039,27 +1040,37 @@ public abstract class MessageBusSupport
 	 */
 	abstract static class JavaClassMimeTypeConversion {
 
+		public static final MimeType APPLICATION_OCTET_STREAM_MIME_TYPE = MimeType.valueOf(APPLICATION_OCTET_STREAM_VALUE);
+
+		public static final MimeType TEXT_PLAIN_MIME_TYPE = MimeType.valueOf(TEXT_PLAIN_VALUE);
+
+		private static ConcurrentMap<String,MimeType> mimeTypesCache = new ConcurrentHashMap<>();
+
 		static MimeType mimeTypeFromObject(Object obj) {
 			Assert.notNull(obj, "object cannot be null.");
 			if (obj instanceof byte[]) {
-				return MimeType.valueOf(APPLICATION_OCTET_STREAM_VALUE);
+				return APPLICATION_OCTET_STREAM_MIME_TYPE;
 			}
 			if (obj instanceof String) {
-				return MimeType.valueOf(TEXT_PLAIN_VALUE);
+				return TEXT_PLAIN_MIME_TYPE;
 			}
 			String className = obj.getClass().getName();
-			if (obj.getClass().isArray()) {
-				// Need to remove trailing ';' for an object array, e.g. "[Ljava.lang.String;" or multi-dimensional 
-				// "[[[Ljava.lang.String;"
-				if (className.endsWith(";")) {
-					className = className.substring(0, className.length() - 1);
+			MimeType mimeType = mimeTypesCache.get(className);
+			if (mimeType == null) {
+				String modifiedClassName = className;
+				if (obj.getClass().isArray()) {
+					// Need to remove trailing ';' for an object array, e.g. "[Ljava.lang.String;" or multi-dimensional
+					// "[[[Ljava.lang.String;"
+					if (modifiedClassName.endsWith(";")) {
+						modifiedClassName = modifiedClassName.substring(0, modifiedClassName.length() - 1);
+					}
+					// Wrap in quotes to handle the illegal '[' character
+					modifiedClassName = "\"" + modifiedClassName + "\"";
 				}
-				// Wrap in quotes to handle the illegal '[' character
-				className = "\"" + className + "\"";
+				mimeType = MimeType.valueOf("application/x-java-object;type=" + modifiedClassName);
+				mimeTypesCache.put(className,mimeType);
 			}
-
-			String mimeType = "application/x-java-object;type=" + className;
-			return MimeType.valueOf(mimeType);
+			return mimeType;
 		}
 
 		static String classNameFromMimeType(MimeType mimeType) {
