@@ -557,28 +557,20 @@ public abstract class MessageBusSupport
 		}
 	}
 
-	protected final MessageValues serializePayloadIfNecessary(Message<?> message, MimeType to) {
+	protected final MessageValues serializePayloadIfNecessary(Message<?> message) {
 		Object originalPayload = message.getPayload();
 		Object originalContentType = message.getHeaders().get(MessageHeaders.CONTENT_TYPE);
-		Object contentType = originalContentType;
-		if (to.equals(ALL)) {
-			return new MessageValues(message);
+
+		//Pass content type as String since some transport adapters will exclude CONTENT_TYPE Header otherwise
+		Object contentType = JavaClassMimeTypeConversion.mimeTypeFromObject(originalPayload).toString();
+		Object payload = serializePayloadIfNecessary(originalPayload);
+		MessageValues messageValues = new MessageValues(message);
+		messageValues.setPayload(payload);
+		messageValues.put(MessageHeaders.CONTENT_TYPE, contentType);
+		if (originalContentType != null) {
+			messageValues.put(XdHeaders.XD_ORIGINAL_CONTENT_TYPE, originalContentType);
 		}
-		else if (to.equals(APPLICATION_OCTET_STREAM)) {
-			//Pass content type as String since some transport adapters will exclude CONTENT_TYPE Header otherwise
-			contentType = JavaClassMimeTypeConversion.mimeTypeFromObject(originalPayload).toString();
-			Object payload = serializePayloadIfNecessary(originalPayload);
-			MessageValues messageValues = new MessageValues(message);
-			messageValues.setPayload(payload);
-			messageValues.put(MessageHeaders.CONTENT_TYPE, contentType);
-			if (originalContentType != null) {
-				messageValues.put(XdHeaders.XD_ORIGINAL_CONTENT_TYPE, originalContentType);
-			}
-			return messageValues;
-		}
-		else {
-			throw new IllegalArgumentException("'to' can only be 'ALL' or 'APPLICATION_OCTET_STREAM'");
-		}
+		return messageValues;
 	}
 
 	private byte[] serializePayloadIfNecessary(Object originalPayload) {

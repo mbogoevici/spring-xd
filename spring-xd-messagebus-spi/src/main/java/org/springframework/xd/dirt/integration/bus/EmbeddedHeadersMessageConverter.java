@@ -54,14 +54,14 @@ public class EmbeddedHeadersMessageConverter {
 	 * Return a new message where some of the original headers of {@code original}
 	 * have been embedded into the new message payload.
 	 */
-	public Message<byte[]> embedHeaders(Message<byte[]> original, String... headers) throws Exception {
+	public byte[] embedHeaders(MessageValues original, String... headers) throws Exception {
 		byte[][] headerValues = new byte[headers.length][];
 		int n = 0;
 		int headerCount = 0;
 		int headersLength = 0;
 		for (String header : headers) {
-			Object value = original.getHeaders().get(header) == null ? null
-					: original.getHeaders().get(header);
+			Object value = original.get(header) == null ? null
+					: original.get(header);
 			if (value != null) {
 				String json = this.objectMapper.toJson(value);
 				headerValues[n++] = json.getBytes("UTF-8");
@@ -73,7 +73,7 @@ public class EmbeddedHeadersMessageConverter {
 			}
 		}
 		// 0xff, n(1), [ [lenHdr(1), hdr, lenValue(4), value] ... ]
-		byte[] newPayload = new byte[original.getPayload().length + headersLength + headerCount * 5 + 2];
+		byte[] newPayload = new byte[((byte[])original.getPayload()).length + headersLength + headerCount * 5 + 2];
 		ByteBuffer byteBuffer = ByteBuffer.wrap(newPayload);
 		byteBuffer.put((byte) 0xff); // signal new format
 		byteBuffer.put((byte) headerCount);
@@ -85,8 +85,9 @@ public class EmbeddedHeadersMessageConverter {
 				byteBuffer.put(headerValues[i]);
 			}
 		}
-		byteBuffer.put(original.getPayload());
-		return MessageBuilder.withPayload(newPayload).copyHeaders(original.getHeaders()).build();
+
+		byteBuffer.put((byte[])original.getPayload());
+		return byteBuffer.array();
 	}
 
 	/**

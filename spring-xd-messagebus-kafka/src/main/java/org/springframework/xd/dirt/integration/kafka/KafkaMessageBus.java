@@ -77,7 +77,6 @@ import org.springframework.retry.policy.SimpleRetryPolicy;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
 import org.springframework.util.CollectionUtils;
-import org.springframework.util.MimeTypeUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.xd.dirt.integration.bus.AbstractBusPropertiesAccessor;
 import org.springframework.xd.dirt.integration.bus.Binding;
@@ -521,8 +520,8 @@ public class KafkaMessageBus extends MessageBusSupport {
 					}
 				};
 
-				MessageHandler handler = new SendingHandler(messageHandler, topicName, accessor,
-						partitions.size());
+				MessageHandler handler = new SendingHandler(topicName, accessor,
+						partitions.size(), producerConfiguration);
 				EventDrivenConsumer consumer = new EventDrivenConsumer((SubscribableChannel) moduleOutputChannel,
 						handler);
 				consumer.setBeanFactory(this.getBeanFactory());
@@ -855,8 +854,6 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 	private class SendingHandler extends AbstractMessageHandler {
 
-		private final MessageHandler delegate;
-
 		private final PartitioningMetadata partitioningMetadata;
 
 		private final AtomicInteger roundRobinCount = new AtomicInteger();
@@ -867,10 +864,11 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 		private int factor;
 
+		private final ProducerConfiguration<byte[], byte[]> producerConfiguration;
 
-		private SendingHandler(MessageHandler delegate, String topicName,
-				KafkaPropertiesAccessor properties, int numberOfPartitions) {
-			this.delegate = delegate;
+
+		private SendingHandler(String topicName, KafkaPropertiesAccessor properties, int numberOfPartitions,
+							   ProducerConfiguration<byte[], byte[]> producerConfiguration) {
 			this.topicName = topicName;
 			this.numberOfKafkaPartitions = numberOfPartitions;
 			this.partitioningMetadata = new PartitioningMetadata(properties);
@@ -885,6 +883,7 @@ public class KafkaMessageBus extends MessageBusSupport {
 				this.factor = (numberOfKafkaPartitions + partitioningMetadata.getPartitionCount() - 1)
 						/ partitioningMetadata.getPartitionCount();
 			}
+			this.producerConfiguration = producerConfiguration;
 		}
 
 		@Override
@@ -902,20 +901,10 @@ public class KafkaMessageBus extends MessageBusSupport {
 				partition = roundRobin() % numberOfKafkaPartitions;
 			}
 
-			MessageValues transformed = serializePayloadIfNecessary(message,
-					MimeTypeUtils.APPLICATION_OCTET_STREAM);
-
-			transformed.put(PARTITION_HEADER, partition);
-			transformed.put("messageKey", partition);
-			transformed.put("topic", topicName);
-			transformed.put("topic", topicName);
-
-			@SuppressWarnings("unchecked")
-			Message<byte[]> transformedMessage = (Message<byte[]>) transformed.toMessage(getMessageBuilderFactory());
-			Message<?> messageToSend = embeddedHeadersMessageConverter.embedHeaders(transformedMessage,
+			MessageValues transformed = serializePayloadIfNecessary(message);
+			byte[] messageToSend = embeddedHeadersMessageConverter.embedHeaders(transformed,
 					KafkaMessageBus.this.headersToMap);
-			Assert.isInstanceOf(byte[].class, messageToSend.getPayload());
-			delegate.handleMessage(messageToSend);
+			producerConfiguration.send(topicName, partition, null, messageToSend);
 		}
 
 		private int roundRobin() {
