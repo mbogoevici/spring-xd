@@ -446,12 +446,13 @@ public class RedisMessageBus extends MessageBusSupport implements DisposableBean
 		@SuppressWarnings("unchecked")
 		@Override
 		protected Object handleRequestMessage(Message<?> requestMessage) {
-			Message<?> theRequestMessage = requestMessage;
+			MessageValues theRequestMessage;
 			try {
 				theRequestMessage = embeddedHeadersMessageConverter.extractHeaders((Message<byte[]>) requestMessage, true);
 			}
 			catch (Exception e) {
 				logger.error(EmbeddedHeadersMessageConverter.decodeExceptionMessage(requestMessage), e);
+				theRequestMessage = new MessageValues(requestMessage);
 			}
 			return deserializePayloadIfNecessary(theRequestMessage).toMessage(getMessageBuilderFactory());
 		}

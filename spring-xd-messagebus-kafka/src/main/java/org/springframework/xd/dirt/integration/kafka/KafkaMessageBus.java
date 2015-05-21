@@ -24,6 +24,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Random;
 import java.util.Set;
@@ -69,6 +70,8 @@ import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.MessageHandler;
 import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.SubscribableChannel;
+import org.springframework.messaging.support.MessageBuilder;
+import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.retry.RetryCallback;
 import org.springframework.retry.RetryContext;
 import org.springframework.retry.RetryOperations;
@@ -835,15 +838,24 @@ public class KafkaMessageBus extends MessageBusSupport {
 		@Override
 		@SuppressWarnings("unchecked")
 		protected Object handleRequestMessage(Message<?> requestMessage) {
-			Message<?> theRequestMessage = requestMessage;
+			MessageValues messageValues = new MessageValues(requestMessage);
 			try {
-				theRequestMessage = embeddedHeadersMessageConverter.extractHeaders((Message<byte[]>) requestMessage, true);
+				messageValues = embeddedHeadersMessageConverter.extractHeaders((Message<byte[]>) requestMessage, true);
 			}
 			catch (Exception e) {
 				logger.error(EmbeddedHeadersMessageConverter.decodeExceptionMessage(requestMessage), e);
+				messageValues = new MessageValues(requestMessage);
 			}
-			return deserializePayloadIfNecessary(theRequestMessage).toMessage(getMessageBuilderFactory());
+			messageValues = deserializePayloadIfNecessary(messageValues);
+			return MessageBuilder.createMessage(messageValues.getPayload(), new KafkaBusMessageHeaders(messageValues));
 		}
+
+		private final class KafkaBusMessageHeaders extends MessageHeaders {
+			KafkaBusMessageHeaders(Map<String,Object> headers) {
+				super(headers, MessageHeaders.ID_VALUE_NONE, -1L);
+			}
+		}
+
 
 		@Override
 		protected boolean shouldCopyRequestHeaders() {

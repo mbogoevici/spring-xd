@@ -58,7 +58,6 @@ import org.springframework.messaging.MessageHandler;
 import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.MessagingException;
 import org.springframework.messaging.SubscribableChannel;
-import org.springframework.messaging.converter.ContentTypeResolver;
 import org.springframework.retry.backoff.ExponentialBackOffPolicy;
 import org.springframework.retry.policy.SimpleRetryPolicy;
 import org.springframework.retry.support.RetryTemplate;
@@ -93,7 +92,7 @@ public abstract class MessageBusSupport
 
 	private volatile MultiTypeCodec<Object> codec;
 
-	private final ContentTypeResolver contentTypeResolver = new StringConvertingContentTypeResolver();
+	private final StringConvertingContentTypeResolver contentTypeResolver = new StringConvertingContentTypeResolver();
 
 	private final ThreadLocal<Boolean> revertingDirectBinding = new ThreadLocal<Boolean>();
 
@@ -594,9 +593,13 @@ public abstract class MessageBusSupport
 	}
 
 	protected final MessageValues deserializePayloadIfNecessary(Message<?> message) {
-		MessageValues messageToSend = new MessageValues(message);
+		return deserializePayloadIfNecessary(new MessageValues(message));
+	}
+
+	protected final MessageValues deserializePayloadIfNecessary(MessageValues message) {
+		MessageValues messageToSend = message;
 		Object originalPayload = message.getPayload();
-		MimeType contentType = contentTypeResolver.resolve(message.getHeaders());
+		MimeType contentType = contentTypeResolver.resolve(messageToSend);
 		Object payload = deserializePayload(originalPayload, contentType);
 		if (payload != null) {
 			messageToSend.setPayload(payload);
