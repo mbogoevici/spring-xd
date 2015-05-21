@@ -46,6 +46,7 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
 import scala.collection.Seq;
 
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.http.MediaType;
 import org.springframework.integration.channel.DirectChannel;
 import org.springframework.integration.endpoint.EventDrivenConsumer;
 import org.springframework.integration.handler.AbstractMessageHandler;
@@ -71,7 +72,6 @@ import org.springframework.messaging.MessageHandler;
 import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.SubscribableChannel;
 import org.springframework.messaging.support.MessageBuilder;
-import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.retry.RetryCallback;
 import org.springframework.retry.RetryContext;
 import org.springframework.retry.RetryOperations;
@@ -292,6 +292,8 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 	private int offsetUpdateShutdownTimeout = 2000;
 
+	private Mode mode = Mode.embeddedHeaders;
+
 	public KafkaMessageBus(ZookeeperConnect zookeeperConnect, String brokers, String zkAddress,
 			MultiTypeCodec<Object> codec, String... headersToMap) {
 		this.zookeeperConnect = zookeeperConnect;
@@ -454,6 +456,10 @@ public class KafkaMessageBus extends MessageBusSupport {
 
 	public void setDefaultMinPartitionCount(int defaultMinPartitionCount) {
 		this.defaultMinPartitionCount = defaultMinPartitionCount;
+	}
+
+	public void setMode(Mode mode) {
+		this.mode = mode;
 	}
 
 	@Override
@@ -838,16 +844,20 @@ public class KafkaMessageBus extends MessageBusSupport {
 		@Override
 		@SuppressWarnings("unchecked")
 		protected Object handleRequestMessage(Message<?> requestMessage) {
-			MessageValues messageValues = new MessageValues(requestMessage);
-			try {
-				messageValues = embeddedHeadersMessageConverter.extractHeaders((Message<byte[]>) requestMessage, true);
+			if (Mode.embeddedHeaders.equals(mode)) {
+				MessageValues messageValues;
+				try {
+					messageValues = embeddedHeadersMessageConverter.extractHeaders((Message<byte[]>) requestMessage, true);
+				}
+				catch (Exception e) {
+					logger.error(EmbeddedHeadersMessageConverter.decodeExceptionMessage(requestMessage), e);
+					messageValues = new MessageValues(requestMessage);
+				}
+				messageValues = deserializePayloadIfNecessary(messageValues);
+				return MessageBuilder.createMessage(messageValues.getPayload(), new KafkaBusMessageHeaders(messageValues));
+			} else {
+				return requestMessage;
 			}
-			catch (Exception e) {
-				logger.error(EmbeddedHeadersMessageConverter.decodeExceptionMessage(requestMessage), e);
-				messageValues = new MessageValues(requestMessage);
-			}
-			messageValues = deserializePayloadIfNecessary(messageValues);
-			return MessageBuilder.createMessage(messageValues.getPayload(), new KafkaBusMessageHeaders(messageValues));
 		}
 
 		private final class KafkaBusMessageHeaders extends MessageHeaders {
@@ -913,10 +923,27 @@ public class KafkaMessageBus extends MessageBusSupport {
 				partition = roundRobin() % numberOfKafkaPartitions;
 			}
 
-			MessageValues transformed = serializePayloadIfNecessary(message);
-			byte[] messageToSend = embeddedHeadersMessageConverter.embedHeaders(transformed,
-					KafkaMessageBus.this.headersToMap);
-			producerConfiguration.send(topicName, partition, null, messageToSend);
+			if (Mode.embeddedHeaders.equals(mode)) {
+				MessageValues transformed = serializePayloadIfNecessary(message);
+				byte[] messageToSend = embeddedHeadersMessageConverter.embedHeaders(transformed,
+						KafkaMessageBus.this.headersToMap);
+				producerConfiguration.send(topicName, partition, null, messageToSend);
+			}
+			else if (Mode.raw.equals(mode)) {
+				Object contentType = message.getHeaders().get(MessageHeaders.CONTENT_TYPE);
+				if (contentType != null
+						&& !contentType.equals(MediaType.APPLICATION_OCTET_STREAM_VALUE)) {
+					logger.error("Raw mode supports only " + MediaType.APPLICATION_OCTET_STREAM_VALUE + " content type"
+							+ message.getPayload().getClass());
+				}
+				if (message.getPayload() instanceof byte[]) {
+					producerConfiguration.send(topicName, partition, null, (byte[])message.getPayload());
+				}
+				else {
+					logger.error("Raw mode supports only byte[] payloads but value sent was of type "
+							+ message.getPayload().getClass());
+				}
+			}
 		}
 
 		private int roundRobin() {
@@ -927,6 +954,11 @@ public class KafkaMessageBus extends MessageBusSupport {
 			return result;
 		}
 
+	}
+
+	public enum Mode {
+		raw,
+		embeddedHeaders
 	}
 
 }

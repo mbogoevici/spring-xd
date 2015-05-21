@@ -70,6 +70,7 @@
 #    kafka:
 #      brokers:                                 localhost:9092
 #      zkAddress:                               localhost:2181
+#      mode:                                    embeddedHeaders
 #      numOfKafkaPartitionsForCountEqualsZero:  10
 #      socketBufferSize:                        2097152
 #      offsetStoreTopic:                        SpringXdOffsets
