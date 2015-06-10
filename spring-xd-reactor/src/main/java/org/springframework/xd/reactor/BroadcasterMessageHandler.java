@@ -68,7 +68,7 @@ import static org.springframework.util.ReflectionUtils.*;
  * @author Mark Pollack
  * @author Stephane Maldini
  */
-public class BroadcasterMessageHandler extends AbstractMessageProducingHandler  implements DisposableBean {
+public class BroadcasterMessageHandler extends AbstractMessageProducingHandler implements DisposableBean {
 
     protected final Log logger = LogFactory.getLog(getClass());
 
@@ -79,6 +79,8 @@ public class BroadcasterMessageHandler extends AbstractMessageProducingHandler  
     private int stopTimeout = 5000;
 
     private int ringBufferSize = 8192;
+
+    private final Environment environment;
 
     /**
      * Construct a new BroadcasterMessageHandler given the reactor based Processor to delegate
@@ -95,8 +97,10 @@ public class BroadcasterMessageHandler extends AbstractMessageProducingHandler  
         //Stream with a RingBufferProcessor
         this.ringBufferProcessor = RingBufferProcessor.share("xd-reactor", ringBufferSize);
 
+        environment = new Environment().assignErrorJournal();
+
         //user defined stream processing
-        Publisher<?> outputStream = processor.process(Streams.wrap(ringBufferProcessor));
+        Publisher<?> outputStream = processor.process(Streams.wrap(ringBufferProcessor).env(environment));
 
         outputStream.subscribe(new DefaultSubscriber<Object>() {
             @Override
@@ -136,8 +140,8 @@ public class BroadcasterMessageHandler extends AbstractMessageProducingHandler  
      * @param ringBufferSize size of the RingBuffer.
      */
     public void setRingBufferSize(int ringBufferSize) {
-        Assert.isTrue(ringBufferSize> 0 && Integer.bitCount(ringBufferSize) == 1,
-                "'ringBufferSize' must be a power of 2 ");
+        Assert.isTrue(ringBufferSize > 0 && Integer.bitCount(ringBufferSize) == 1,
+            "'ringBufferSize' must be a power of 2 ");
         this.ringBufferSize = ringBufferSize;
     }
 
@@ -160,6 +164,7 @@ public class BroadcasterMessageHandler extends AbstractMessageProducingHandler  
         if (ringBufferProcessor != null) {
             ringBufferProcessor.awaitAndShutdown(stopTimeout, TimeUnit.MILLISECONDS);
         }
+        environment.shutdown();
     }
 
 

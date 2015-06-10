@@ -81,6 +81,8 @@ public class MultipleBroadcasterMessageHandler extends AbstractMessageProducingH
     @SuppressWarnings("rawtypes")
     private final Processor processor;
 
+    private final Environment environment;
+
     private final Class<?> inputType;
 
     private final Expression partitionExpression;
@@ -103,7 +105,7 @@ public class MultipleBroadcasterMessageHandler extends AbstractMessageProducingH
         this.partitionExpression = spelExpressionParser.parseExpression(partitionExpression);
 
         // This by default create no dispatcher but provides for Timer if buffer(1, TimeUnit.Seconds) or similar is used
-        Environment.initializeIfEmpty();
+        environment = new Environment().assignErrorJournal();
 
         this.inputType = ReactorReflectionUtils.extractGeneric(processor);
     }
@@ -134,7 +136,7 @@ public class MultipleBroadcasterMessageHandler extends AbstractMessageProducingH
             if (existingReactiveProcessor == null) {
                 reactiveProcessor = reactiveProcessorMap.get(idToUse);
                 //user defined stream processing
-                Publisher<?> outputStream = processor.process(Streams.wrap(reactiveProcessor));
+                Publisher<?> outputStream = processor.process(Streams.wrap(reactiveProcessor).env(environment));
 
                 outputStream.subscribe(new DefaultSubscriber<Object>() {
                     Subscription s;
@@ -180,7 +182,7 @@ public class MultipleBroadcasterMessageHandler extends AbstractMessageProducingH
         for (Subscription subscription : controlsMap.values()) {
             subscription.cancel();
         }
-        Environment.terminate();
+        environment.shutdown();
     }
 
     @Override
